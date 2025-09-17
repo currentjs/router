@@ -1,0 +1,10 @@
+.DS_Store
+.vscode
+.idea
+dist
+tests-dist
+node_modules
+package-lock.json
+# temporary
+tests
+.github/workflows/ci.yml

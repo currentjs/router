@@ -1,0 +1,117 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      changelog:
+        description: "Changelog entry for this release (describe what changed)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build project
+        run: npm run build
+
+      # todo: Run tests before publishing
+      # - name: Run tests
+      #   run: npm test
+
+      - name: Get current version
+        id: current_version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Calculate new version
+        id: new_version
+        run: |
+          current="${{ steps.current_version.outputs.version }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          case "${{ inputs.bump }}" in
+            major) new_version="$((major + 1)).0.0" ;;
+            minor) new_version="$major.$((minor + 1)).0" ;;
+            patch) new_version="$major.$minor.$((patch + 1))" ;;
+          esac
+          echo "version=$new_version" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG.md
+        run: |
+          # Prepare the new entry
+          DATE=$(date +"%Y-%m-%d")
+          VERSION="${{ steps.new_version.outputs.version }}"
+          CHANGELOG_TEXT="${{ inputs.changelog }}"
+          
+          # Create a temporary file with the new entry
+          echo "## [$VERSION] - $DATE" > /tmp/new_entry.md
+          echo "" >> /tmp/new_entry.md
+          echo "$CHANGELOG_TEXT" >> /tmp/new_entry.md
+          echo "" >> /tmp/new_entry.md
+          
+          # Insert new entry after the header
+          if grep -q "^## \[" CHANGELOG.md; then
+            # Insert before the first existing version entry
+            awk '/^## \[/{print ""; system("cat /tmp/new_entry.md"); print; next}1' CHANGELOG.md > /tmp/changelog_new.md
+            mv /tmp/changelog_new.md CHANGELOG.md
+          else
+            # No existing entries, add after header
+            cat /tmp/new_entry.md >> CHANGELOG.md
+          fi
+          
+          rm -f /tmp/new_entry.md
+
+      - name: Configure git user
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+
+      - name: Commit changelog
+        run: |
+          git add CHANGELOG.md
+          git commit -m "Update CHANGELOG.md for v${{ steps.new_version.outputs.version }}"
+
+      - name: Bump version
+        run: |
+          npm version ${{ inputs.bump }} -m "Release: v%s"
+
+      - name: Push changes and tags
+        run: |
+          git push
+          git push --tags
+
+      - name: Setup Node.js for publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+
