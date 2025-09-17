@@ -1,6 +1,6 @@
 {
   "name": "@currentjs/router",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lightweight decorator-based HTTP/HTTPS server with routing,JWT authentication, and static files serving for @currentjs generated apps.",
   "license": "LGPL-3.0",
   "author": "Konstantin Zavalny",
@@ -12,7 +12,12 @@
   },
   "homepage": "https://github.com/currentjs/router",
   "bugs": "https://github.com/currentjs/router/issues",
-  "keywords": ["currentjs", "router", "server", "static"],
+  "keywords": [
+    "currentjs",
+    "router",
+    "server",
+    "static"
+  ],
   "files": [
     "dist",
     "CHANGELOG.md"
@@ -32,4 +37,3 @@
     "typescript": "^5.6.3"
   }
 }
-
