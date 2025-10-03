@@ -158,13 +158,41 @@ function getContentType(ext?: string): string {
   return types[ext || ''] || 'application/octet-stream';
 }
 
+function parseCookies(cookieHeader?: string | string[]): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  const header = Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader;
+  if (!header || typeof header !== 'string') return cookies;
+  
+  header.split(';').forEach(cookie => {
+    const [name, ...rest] = cookie.split('=');
+    if (name && rest.length > 0) {
+      cookies[name.trim()] = rest.join('=').trim();
+    }
+  });
+  
+  return cookies;
+}
+
 function extractUserFromAuthorizationHeader(headers: Record<string, string | string[]>): AuthenticatedUser | undefined {
   try {
+    let token: string | undefined;
+    
+    // First, try to get token from Authorization header
     const raw = headers['authorization'];
     const header = Array.isArray(raw) ? raw[0] : raw;
-    if (!header || typeof header !== 'string') return undefined;
-    if (!header.startsWith('Bearer ')) return undefined;
-    const token = header.slice(7).trim();
+    if (header && typeof header === 'string' && header.startsWith('Bearer ')) {
+      token = header.slice(7).trim();
+    }
+    
+    // If no token in Authorization header, check cookies
+    if (!token) {
+      const cookies = parseCookies(headers['cookie']);
+      token = cookies['authToken'];
+    }
+    
+    // If still no token, return undefined
+    if (!token) return undefined;
+    
     const parts = token.split('.');
     if (parts.length !== 3) return undefined;
 
