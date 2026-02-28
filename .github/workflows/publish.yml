@@ -72,13 +72,14 @@ jobs:
           echo "$CHANGELOG_TEXT" >> /tmp/new_entry.md
           echo "" >> /tmp/new_entry.md
           
-          # Insert new entry after the header
-          if grep -q "^## \[" CHANGELOG.md; then
-            # Insert before the first existing version entry
-            awk '/^## \[/{print ""; system("cat /tmp/new_entry.md"); print; next}1' CHANGELOG.md > /tmp/changelog_new.md
+          # Insert new entry after the header, before the first existing version
+          FIRST_VERSION_LINE=$(grep -n "^## \[" CHANGELOG.md | head -1 | cut -d: -f1)
+          if [ -n "$FIRST_VERSION_LINE" ]; then
+            head -n $((FIRST_VERSION_LINE - 1)) CHANGELOG.md > /tmp/changelog_new.md
+            cat /tmp/new_entry.md >> /tmp/changelog_new.md
+            tail -n +$FIRST_VERSION_LINE CHANGELOG.md >> /tmp/changelog_new.md
             mv /tmp/changelog_new.md CHANGELOG.md
           else
-            # No existing entries, add after header
             cat /tmp/new_entry.md >> CHANGELOG.md
           fi
           
