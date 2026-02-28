@@ -340,6 +340,7 @@ export function createWebServer(
           const html = await renderer(maybeRoute.render.template, result ?? {}, layoutToUse);
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('X-Layout', maybeRoute.render.layout || '');
           res.end(html);
           return;
         }
