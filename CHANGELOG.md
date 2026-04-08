@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.0] - 2026-04-08
+
+HTTP errors and request logs
+
 ## [0.1.3] - 2026-02-28
 
 added X-Layout header
