@@ -7,6 +7,7 @@ import { createReadStream, statSync } from 'fs';
 import { join, resolve, normalize, sep } from 'path';
 import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
 import type { IContext, AuthenticatedUser } from '../types/IContext';
+import { BaseHttpError } from '../errors/BaseHttpError';
 
 // Controllers are now passed directly; basePath is derived from @Controller decorator on class
 
@@ -227,6 +228,18 @@ function extractUserFromAuthorizationHeader(headers: Record<string, string | str
   }
 }
 
+function generateTraceId(): string {
+  const bytes = new Uint8Array(8);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Math.random() * 256 | 0;
+  }
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function generateTimestamp(): string {
+  return new Date().toISOString();
+}
+
 export function createWebServer(
   { controllers, webDir }: { controllers: any[], webDir?: string },
   options: WebServerOptions = {}
@@ -251,6 +264,8 @@ export function createWebServer(
   }
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
+    const traceId = generateTraceId();
+
     try {
       const method = (req.method || 'GET').toUpperCase() as HttpMethod;
       const { pathname = '/', query } = parseUrl(req.url || '/', true);
@@ -269,6 +284,18 @@ export function createWebServer(
         }
       }
 
+      const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+      const bodySize = rawBody ? Buffer.byteLength(rawBody, 'utf8') : 0;
+      console.log(JSON.stringify({
+        timestamp: generateTimestamp(),
+        traceId,
+        method,
+        path,
+        clientIp,
+        headers: req.headers,
+        bodySize,
+      }))
+
       let matched: MatchedRoute | null = null;
       for (const entry of routeTable) {
         if (entry.route.method !== method) continue;
@@ -286,12 +313,24 @@ export function createWebServer(
         const staticDir = options.staticDir || webDir;
         if (staticDir) {
           const served = await serveStaticFile(staticDir, path, res, options.indexFiles);
-          if (served) return;
+          if (served) {
+            console.log(JSON.stringify({
+              timestamp: generateTimestamp(),
+              traceId,
+              response: '200 (static file)'
+            }))
+            return;
+          }
         }
-        
+
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: 'Not Found' }));
+        console.log(JSON.stringify({
+          timestamp: generateTimestamp(),
+          traceId,
+          response: '404 (application/json)'
+        }))
         return;
       }
 
@@ -331,17 +370,22 @@ export function createWebServer(
         // If route has render metadata and a renderer exists in options, render HTML here
         if (isRenderableRoute) {
           // Check if this is a partial content request (SPA navigation)
-          const isPartialRequest = headers['x-partial-content'] === 'true' || 
+          const isPartialRequest = headers['x-partial-content'] === 'true' ||
                                   (Array.isArray(headers['x-partial-content']) && headers['x-partial-content'][0] === 'true');
-          
+
           // Use layout only if it's not a partial request
           const layoutToUse = isPartialRequest ? undefined : maybeRoute.render.layout;
-          
+
           const html = await renderer(maybeRoute.render.template, result ?? {}, layoutToUse);
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('X-Layout', maybeRoute.render.layout || '');
           res.end(html);
+          console.log(JSON.stringify({
+            timestamp: generateTimestamp(),
+            traceId,
+            response: '200 (text/html)'
+          }))
           return;
         }
 
@@ -350,41 +394,62 @@ export function createWebServer(
         res.statusCode = 200;
         res.setHeader('Content-Type', contentType);
         res.end(responseBody);
+        console.log(JSON.stringify({
+          timestamp: generateTimestamp(),
+          traceId,
+          response: `200 ${contentType}`
+        }))
       } catch (handlerError: any) {
-        // If this is a renderable route and we have an error template, render error page
+        const isHttpError = handlerError instanceof BaseHttpError;
+        const statusCode = isHttpError ? handlerError.getHTTPCode() : 500;
+        const errorMessage = handlerError?.message || 'Internal Server Error';
+
+        console.log(JSON.stringify({
+          timestamp: generateTimestamp(),
+          traceId,
+          errorCode: statusCode,
+          errorMessage
+        }))
+
         if (isRenderableRoute && options.errorTemplate) {
           try {
             // Check if this is a partial content request (SPA navigation)
-            const isPartialRequest = headers['x-partial-content'] === 'true' || 
+            const isPartialRequest = headers['x-partial-content'] === 'true' ||
                                     (Array.isArray(headers['x-partial-content']) && headers['x-partial-content'][0] === 'true');
-            
+
             // Use layout only if it's not a partial request
             const layoutToUse = isPartialRequest ? undefined : maybeRoute.render.layout;
-            
-            const errorData = {
-              error: handlerError?.message || 'An error occurred',
-              statusCode: 500
-            };
+
+            const errorData = { error: errorMessage, statusCode };
             const html = await renderer(options.errorTemplate, errorData, layoutToUse);
-            res.statusCode = 500;
+            res.statusCode = statusCode;
             res.setHeader('Content-Type', 'text/html; charset=utf-8');
             res.end(html);
             return;
           } catch (renderError) {
-            // If error template rendering fails, fall back to JSON error
             console.error('Error template rendering failed:', renderError);
           }
         }
-        
-        // Default JSON error response (for non-renderable routes or when error template fails)
-        res.statusCode = 500;
+
+        res.statusCode = statusCode;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: handlerError?.message || 'Internal Server Error' }));
+        res.end(JSON.stringify({ error: errorMessage }));
       }
     } catch (error: any) {
-      res.statusCode = 500;
+      const isHttpError = error instanceof BaseHttpError;
+      const statusCode = isHttpError ? error.getHTTPCode() : 500;
+      const errorMessage = error?.message || 'Internal Server Error';
+
+      console.log(JSON.stringify({
+        timestamp: generateTimestamp(),
+        traceId,
+        errorCode: statusCode,
+        errorMessage,
+      }))
+
+      res.statusCode = statusCode;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: error?.message || 'Internal Server Error' }));
+      res.end(JSON.stringify({ error: errorMessage }));
     }
   };
 
