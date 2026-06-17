@@ -1,20 +1,11 @@
 {
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "ES2019",
-    "module": "CommonJS",
-    "moduleResolution": "node",
-    "outDir": "tests-dist",
+    "outDir": "dist-test",
     "rootDir": ".",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "types": ["node"],
-    "experimentalDecorators": true,
-    "baseUrl": "."
+    "declaration": false,
+    "experimentalDecorators": true
   },
-  "include": [
-    "tests/**/*.ts",
-    "src/**/*.ts"
-  ]
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": []
 }
-
