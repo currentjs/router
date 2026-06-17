@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.1] - 2026-06-17
+
+- Infrastructure: tests
+
 ## [0.2.0] - 2026-04-08
 
 HTTP errors and request logs
