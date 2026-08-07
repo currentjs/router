@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3] - 2026-08-07
+
+- bug Routes order must not be important (#1)
+- improvement Treat index.html as / route (#3)
+- readme updated
+- (previous version was not published)
+
 ## [0.2.2] - 2026-08-07
 
 - bug Routes order must not be important (#1)
