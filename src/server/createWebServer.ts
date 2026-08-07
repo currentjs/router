@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { parse as parseUrl } from 'url';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { createReadStream, statSync } from 'fs';
-import { join, resolve, normalize, sep } from 'path';
+import { join, resolve, sep } from 'path';
 import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
 import type { IContext, AuthenticatedUser } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
@@ -40,6 +40,84 @@ function buildRouteKey(method: HttpMethod, path: string): string {
   return `${method} ${normalizePath(path)}`;
 }
 
+interface RouteTableEntry {
+  route: RouteDefinition;
+  controllerInstance: any;
+  matcher: { regex: RegExp; keys: string[] };
+  /** Original insertion index; used as tie-breaker so sort is stable. */
+  registrationIndex: number;
+}
+
+/**
+ * Compare two dynamic (parametric) route entries so that more-specific routes
+ * sort earlier.  Ordering rules applied in priority order:
+ *   1. Fewer total parameter segments first.
+ *   2. Segment-by-segment, left-to-right: a static segment beats a `:param`.
+ *   3. Original registration index (first registered wins among equals).
+ */
+export function compareRouteSpecificity(a: RouteTableEntry, b: RouteTableEntry): number {
+  const aSegs = normalizePath(a.route.path).split('/').filter(Boolean);
+  const bSegs = normalizePath(b.route.path).split('/').filter(Boolean);
+  const aParams = aSegs.filter(s => s.startsWith(':')).length;
+  const bParams = bSegs.filter(s => s.startsWith(':')).length;
+  if (aParams !== bParams) return aParams - bParams;
+  const len = Math.min(aSegs.length, bSegs.length);
+  for (let i = 0; i < len; i++) {
+    const aIsParam = aSegs[i].startsWith(':');
+    const bIsParam = bSegs[i].startsWith(':');
+    if (aIsParam !== bIsParam) return aIsParam ? 1 : -1;
+  }
+  return a.registrationIndex - b.registrationIndex;
+}
+
+interface RouteTable {
+  /** Fully-static routes (no path parameters), keyed by `METHOD /path`. */
+  staticRoutes: Map<string, RouteTableEntry>;
+  /** Parametric routes, pre-sorted by specificity (most specific first). */
+  dynamicRoutes: RouteTableEntry[];
+}
+
+export function buildRouteTable(controllers: any[]): RouteTable {
+  const staticRoutes = new Map<string, RouteTableEntry>();
+  const dynamicRoutes: RouteTableEntry[] = [];
+  let registrationIndex = 0;
+
+  for (const controllerInstance of controllers) {
+    const controllerCtor = Object.getPrototypeOf(controllerInstance).constructor;
+    const routes: RouteDefinition[] = controllerCtor.routes || [];
+    const basePath: string = controllerCtor.basePath || '';
+    const renders: Record<string, { template: string; layout?: string }> = controllerCtor.renders || {};
+
+    for (const route of routes) {
+      const fullPath = normalizePath(`${normalizePath(basePath)}${normalizePath(route.path)}`.replace(/\/+/, '/'));
+      const matcher = compilePathToRegex(fullPath);
+      const r = renders[route.handler];
+      const routeWithRender: RouteDefinition & { render?: { template: string; layout?: string } } = r
+        ? ({ ...route, path: fullPath, render: { template: r.template, layout: r.layout } } as any)
+        : ({ ...route, path: fullPath } as any);
+
+      const entry: RouteTableEntry = {
+        route: routeWithRender as any,
+        controllerInstance,
+        matcher,
+        registrationIndex: registrationIndex++,
+      };
+
+      if (matcher.keys.length === 0) {
+        const key = buildRouteKey(route.method, fullPath);
+        if (!staticRoutes.has(key)) {
+          staticRoutes.set(key, entry);
+        }
+      } else {
+        dynamicRoutes.push(entry);
+      }
+    }
+  }
+
+  dynamicRoutes.sort(compareRouteSpecificity);
+  return { staticRoutes, dynamicRoutes };
+}
+
 function compilePathToRegex(path: string) {
   const normalized = normalizePath(path);
   const keys: string[] = [];
@@ -71,8 +149,9 @@ function base64UrlToBuffer(input: string): Buffer {
 }
 
 function isPathInside(parent: string, child: string): boolean {
-  const relative = normalize(child).replace(parent, '');
-  return resolve(child).startsWith(resolve(parent) + sep);
+  const parentResolved = resolve(parent);
+  const childResolved = resolve(child);
+  return childResolved === parentResolved || childResolved.startsWith(parentResolved + sep);
 }
 
 async function serveStaticFile(
@@ -244,24 +323,7 @@ export function createWebServer(
   { controllers, webDir }: { controllers: any[], webDir?: string },
   options: WebServerOptions = {}
 ) {
-  const routeTable: Array<{ route: RouteDefinition; controllerInstance: any; matcher: { regex: RegExp; keys: string[] } }> = [];
-
-  for (const controllerInstance of controllers) {
-    const controllerCtor = Object.getPrototypeOf(controllerInstance).constructor;
-    const routes: RouteDefinition[] = controllerCtor.routes || [];
-    const basePath: string = controllerCtor.basePath || '';
-    const renders: Record<string, { template: string; layout?: string }> = controllerCtor.renders || {};
-    for (const route of routes) {
-      const fullPath = normalizePath(`${normalizePath(basePath)}${normalizePath(route.path)}`.replace(/\/+/, '/'));
-      const matcher = compilePathToRegex(fullPath);
-      // Attach any render metadata to the route object for downstream use
-      const r = renders[route.handler];
-      const routeWithRender: RouteDefinition & { render?: { template: string; layout?: string } } = r
-        ? ({ ...route, path: fullPath, render: { template: r.template, layout: r.layout } } as any)
-        : ({ ...route, path: fullPath } as any);
-      routeTable.push({ route: routeWithRender as any, controllerInstance, matcher });
-    }
-  }
+  const { staticRoutes, dynamicRoutes } = buildRouteTable(controllers);
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
     const traceId = generateTraceId();
@@ -297,14 +359,24 @@ export function createWebServer(
       }))
 
       let matched: MatchedRoute | null = null;
-      for (const entry of routeTable) {
-        if (entry.route.method !== method) continue;
-        const match = entry.matcher.regex.exec(path);
-        if (match) {
-          const params: Record<string, string> = {};
-          entry.matcher.keys.forEach((k, i) => (params[k] = match[i + 1]));
-          matched = { controllerInstance: entry.controllerInstance, route: entry.route, params };
-          break;
+
+      // Phase 1: O(1) lookup for fully-static routes (no path parameters).
+      const staticEntry = staticRoutes.get(buildRouteKey(method, path));
+      if (staticEntry) {
+        matched = { controllerInstance: staticEntry.controllerInstance, route: staticEntry.route, params: {} };
+      }
+
+      // Phase 2: scan parametric routes (sorted by specificity, most specific first).
+      if (!matched) {
+        for (const entry of dynamicRoutes) {
+          if (entry.route.method !== method) continue;
+          const match = entry.matcher.regex.exec(path);
+          if (match) {
+            const params: Record<string, string> = {};
+            entry.matcher.keys.forEach((k, i) => (params[k] = match[i + 1]));
+            matched = { controllerInstance: entry.controllerInstance, route: entry.route, params };
+            break;
+          }
         }
       }
 
