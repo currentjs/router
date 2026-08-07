@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from '../lib.js';
 import { Controller, Get, Post, Render } from '../../src/decorators/RouteDecorators.js';
 import { createWebServer } from '../../src/server/createWebServer.js';
 import * as http from 'http';
-import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -47,6 +47,41 @@ class ApiController {
   @Render('page.html', 'main')
   async render() {
     return { title: 'Hi' };
+  }
+}
+
+// Controller that intentionally registers the parametric route BEFORE the static one.
+@Controller('/items')
+class ItemsController {
+  @Get('/:id')
+  async getById(ctx: any) {
+    return { via: 'getById', id: ctx.request.parameters.id };
+  }
+
+  @Get('/new')
+  async getNew() {
+    return { via: 'getNew' };
+  }
+
+  // Same param-count conflict: /:id/edit registered before /new/edit.
+  @Get('/:id/edit')
+  async editById(ctx: any) {
+    return { via: 'editById', id: ctx.request.parameters.id };
+  }
+
+  @Get('/new/edit')
+  async editNew() {
+    return { via: 'editNew' };
+  }
+}
+
+// Catch-all controller registered AFTER ItemsController — its /:slug must not
+// swallow /items/new which is a fully-static route in ItemsController.
+@Controller('')
+class CatchAllController {
+  @Get('/:slug')
+  async catchAll(ctx: any) {
+    return { via: 'catchAll', slug: ctx.request.parameters.slug };
   }
 }
 
@@ -111,5 +146,110 @@ describe('createWebServer functional', () => {
     const res = await request('GET', `${baseUrl}/nope`);
     expect(res.status).toBe(404);
     expect(res.json).toEqual({ error: 'Not Found' });
+  });
+});
+
+describe('static index.html routing', () => {
+  let server: any;
+  let baseUrl: string;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'router-index-tests-'));
+    writeFileSync(join(tmpDir, 'index.html'), '<html><body>Root Index</body></html>', 'utf8');
+    mkdirSync(join(tmpDir, 'pages'));
+    writeFileSync(join(tmpDir, 'pages', 'index.html'), '<html><body>Pages Index</body></html>', 'utf8');
+
+    const web = createWebServer({ controllers: [new ApiController()], webDir: tmpDir }, { port: 0 });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET / serves root index.html', async () => {
+    const res = await request('GET', `${baseUrl}/`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Root Index');
+  });
+
+  it('GET /pages serves pages/index.html', async () => {
+    const res = await request('GET', `${baseUrl}/pages`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Pages Index');
+  });
+
+  it('GET /pages/ (trailing slash) also serves pages/index.html', async () => {
+    const res = await request('GET', `${baseUrl}/pages/`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Pages Index');
+  });
+
+  it('GET /pages/index.html serves the file directly', async () => {
+    const res = await request('GET', `${baseUrl}/pages/index.html`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Pages Index');
+  });
+});
+
+describe('route matching order', () => {
+  let server: any;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const web = createWebServer({
+      controllers: [new ItemsController(), new CatchAllController()],
+    });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it('static route /items/new wins over parametric /:id registered earlier', async () => {
+    const res = await request('GET', `${baseUrl}/items/new`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'getNew' });
+  });
+
+  it('parametric route still works for a real id', async () => {
+    const res = await request('GET', `${baseUrl}/items/42`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'getById', id: '42' });
+  });
+
+  it('static /items/new/edit wins over /:id/edit (same param count, static segment first)', async () => {
+    const res = await request('GET', `${baseUrl}/items/new/edit`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'editNew' });
+  });
+
+  it('parametric /items/:id/edit still works for a real id', async () => {
+    const res = await request('GET', `${baseUrl}/items/99/edit`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'editById', id: '99' });
+  });
+
+  it('catch-all /:slug in a later controller does not shadow static /items/new', async () => {
+    const res = await request('GET', `${baseUrl}/items/new`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'getNew' });
+  });
+
+  it('catch-all /:slug works for a path with no other match', async () => {
+    const res = await request('GET', `${baseUrl}/something`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ via: 'catchAll', slug: 'something' });
   });
 });
