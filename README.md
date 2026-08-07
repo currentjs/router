@@ -172,6 +172,55 @@ async getProfile(ctx: IContext) {
 - Secret: Set `JWT_SECRET` environment variable
 - Standard claims: `id` (or `sub`), `role`, `email`
 
+## Error Handling (HTTP Errors Made Easy)
+
+Throw one of the built-in error classes from a handler and the router will automatically respond with the matching HTTP status code — no manual `res.statusCode` juggling required:
+
+```ts
+import { NotFoundError, ForbiddenError, BadRequestError } from '@currentjs/router';
+
+@Get('/:id')
+async getPost(ctx: IContext) {
+  const post = await this.store.findById(ctx.request.parameters.id);
+  if (!post) {
+    throw new NotFoundError('Post not found');
+  }
+  if (post.authorId !== ctx.request.user?.id) {
+    throw new ForbiddenError('You do not own this post');
+  }
+  return post;
+}
+```
+
+The error's `message` is returned as `{ "error": "<message>" }` (JSON routes) or rendered via `errorTemplate` (`@Render` routes). Any other thrown error (i.e. not one of the classes below) results in a `500` response.
+
+**Available Error Classes:**
+
+| Class | Status Code |
+|---|---|
+| `BadRequestError` | 400 |
+| `UnauthorizedError` | 401 |
+| `PaymentRequiredError` | 402 |
+| `ForbiddenError` | 403 |
+| `NotFoundError` | 404 |
+| `MethodNotAllowedError` | 405 |
+| `NotAcceptableError` | 406 |
+| `RequestTimeoutError` | 408 |
+| `ConflictError` | 409 |
+| `GoneError` | 410 |
+| `ContentTooLargeError` | 413 |
+| `UriTooLongError` | 414 |
+| `UnsupportedMediaTypeError` | 415 |
+| `TooEarlyError` | 425 |
+| `UpgradeRequiredError` | 426 |
+| `TooManyRequestsError` | 429 |
+| `UnavailableForLegalReasonsError` | 451 |
+| `InternalServerErrorError` | 500 |
+| `NotImplementedError` | 501 |
+| `ServiceNotAvailableError` | 503 |
+
+All of them take a single `msg: string` constructor argument and extend the abstract `BaseHttpError` class (which exposes `getHTTPCode()`), in case you want to build your own custom error types on top of it.
+
 ## Template Rendering (SSR)
 
 When you provide a `renderer` function, routes with `@Render` will return HTML:
