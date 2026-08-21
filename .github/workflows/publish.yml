@@ -45,7 +45,8 @@ jobs:
           package-manager-cache: false
 
       - name: Ensure npm supports OIDC publish
-        run: npm install -g npm@latest
+        # Pin npm 11 — npm@latest (12.x) has had provenance/OIDC packaging regressions
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm install
@@ -129,5 +130,65 @@ jobs:
           git push --tags
 
       - name: Publish to npm
-        # OIDC trusted publishing — do not set NODE_AUTH_TOKEN
+        # Native trusted publishing: npm >= 11.5.1 detects the GitHub Actions
+        # OIDC environment, exchanges the ID token with the registry itself and
+        # enables provenance automatically. No npm token may be configured
+        # anywhere (no NODE_AUTH_TOKEN, no _authToken in any .npmrc), otherwise
+        # npm may fall back to token auth and the registry rejects the publish.
         run: npm publish --access public
+
+      - name: Show npm debug log (on failure)
+        # The one-line "403 Forbidden - PUT ..." hides the registry's actual
+        # rejection reason; the full response is in the npm debug log.
+        if: failure()
+        run: |
+          for f in "$HOME"/.npm/_logs/*.log; do
+            echo "=== $f ==="
+            cat "$f"
+          done
+
+      - name: Diagnose registry rejection (on failure)
+        # npm CLI only prints the `error` field of an error response body.
+        # Replay the publish via libnpmpublish and dump the raw status,
+        # headers and body of the registry's response. Provenance is disabled
+        # here, so if this attempt SUCCEEDS the rejection is tied to the
+        # provenance/attestation path of the normal publish.
+        if: failure()
+        run: |
+          set -euo pipefail
+          OID=$(curl -sS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H "Accept: application/json" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm%3Aregistry.npmjs.org")
+          JWT=$(echo "$OID" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).value")
+          EXCHANGE=$(curl -sS -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/json" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$(node -p "encodeURIComponent('@currentjs/router')")")
+          DIAG_TOKEN=$(echo "$EXCHANGE" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).token")
+          export DIAG_TOKEN
+          npm pack --pack-destination "$RUNNER_TEMP"
+          TARBALL=$(ls "$RUNNER_TEMP"/currentjs-router-*.tgz | head -1)
+          export TARBALL
+          npm install --no-save --prefix "$RUNNER_TEMP/diag" libnpmpublish
+          NODE_PATH="$RUNNER_TEMP/diag/node_modules" node -e '
+            const fs = require("fs");
+            const { publish } = require("libnpmpublish");
+            const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const tarball = fs.readFileSync(process.env.TARBALL);
+            (async () => {
+              try {
+                const res = await publish(manifest, tarball, {
+                  access: "public",
+                  provenance: false,
+                  forceAuth: { token: process.env.DIAG_TOKEN, _authToken: process.env.DIAG_TOKEN },
+                });
+                console.log("DIAG: publish WITHOUT provenance SUCCEEDED:", res.status || res.statusCode);
+              } catch (e) {
+                console.log("DIAG statusCode:", e.statusCode);
+                console.log("DIAG message:", e.message);
+                try { console.log("DIAG headers:", JSON.stringify(e.headers, null, 2)); } catch {}
+                console.log("DIAG body:", JSON.stringify(e.body ?? null, null, 2));
+              }
+            })();
+          '
