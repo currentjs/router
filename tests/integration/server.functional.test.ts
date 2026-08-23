@@ -12,7 +12,9 @@ function request(method: string, url: string, body?: any, headers: Record<string
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = typeof body === 'string' ? body : body ? JSON.stringify(body) : undefined;
-    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search, headers: { 'Content-Type': 'application/json', ...(headers || {}), ...(data ? { 'Content-Length': Buffer.byteLength(data).toString() } : {}) } }, (res) => {
+    // Connection: close keeps server.close() in the teardown hook from waiting
+    // out the keep-alive timeout on an idle socket.
+    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search, headers: { Connection: 'close', 'Content-Type': 'application/json', ...(headers || {}), ...(data ? { 'Content-Length': Buffer.byteLength(data).toString() } : {}) } }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
@@ -249,7 +251,7 @@ describe('body size limit', () => {
         hostname: u.hostname,
         port: Number(u.port),
         path: u.pathname,
-        headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+        headers: { Connection: 'close', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
       }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c) => chunks.push(c));

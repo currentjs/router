@@ -34,11 +34,11 @@ Two structural gaps still shape most of the work below:
 | ✅ `405` / `HEAD` / `OPTIONS`       | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
 | ✅ Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
 | ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
+| ✅ Test coverage                    | 0.3.0   | L    | Traversal, JWT rejection/`exp`, error mapping, partial content and body parsing covered; `npm run test:coverage` + a CI job |
 | Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
 | Request lifecycle robustness       | 0.3.2   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                    |
 | Graceful shutdown + timeouts       | 0.3.2   | S    | `closeIdleConnections` + drain timeout; expose `requestTimeout`/`headersTimeout`                              |
 | Static file overhaul               | 0.3.3   | L    | See Known Issues — caching, `Content-Length`, async `fs`, dotfile denial, MIME gaps, header-sent guard        |
-| Test coverage                      | 0.3.0   | L    | Backfill traversal, JWT rejection/`exp`, error mapping, partial content, body parsing; add coverage reporting |
 | **Response API**                   | 0.4.0   | L    | Make `context.response` real: `status`, `headers`, `cookies`, `redirect()`, `Buffer`/`Stream` returns         |
 | gen alignment for responses        | 0.4.0   | M    | Lets `gen` emit `201 Location`, `204`, server-side redirects, and `Set-Cookie`; removes the client-side hack  |
 | Middleware / hook pipeline         | 0.5 ?   | L    | [ under rethinking ] `onRequest` / `preHandler` / `onSend` / `onError`, per-controller and per-route          |
@@ -94,7 +94,8 @@ promise.
 - **Static-file errors after headers are sent.** *(0.3.3)*
 `serveStaticFile` resolves `false` on a stream error even though it may already have piped into
 `res`; the caller then sets `statusCode = 404` and throws `ERR_HTTP_HEADERS_SENT`, and the outer
-catch throws again on the retry.
+catch throws again on the retry. Deliberately left untested — a test here would pin the broken
+behaviour; it should be written together with the fix.
 - **A catch-all route disables static serving.** *(0.3.3)*
 Static files are only attempted after the route table misses, so any controller declaring
 `@Get('/:slug')` swallows every asset request.

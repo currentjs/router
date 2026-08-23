@@ -12,7 +12,9 @@ function request(
 ): Promise<{ status: number; text: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search }, (res) => {
+    // Connection: close keeps server.close() in the teardown hook from waiting
+    // out the keep-alive timeout on an idle socket.
+    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search, headers: { Connection: 'close' } }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {

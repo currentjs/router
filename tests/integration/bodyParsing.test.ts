@@ -20,7 +20,9 @@ function rawRequest(
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = body instanceof Buffer ? body : body ? Buffer.from(body) : undefined;
-    const reqHeaders: Record<string, string> = { ...headers };
+    // Connection: close keeps server.close() in the teardown hook from waiting
+    // out the keep-alive timeout on an idle socket.
+    const reqHeaders: Record<string, string> = { Connection: 'close', ...headers };
     if (data) reqHeaders['Content-Length'] = String(data.length);
 
     const req = http.request(

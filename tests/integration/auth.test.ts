@@ -39,7 +39,9 @@ function request(opts: {
         hostname: u.hostname,
         port: Number(u.port),
         path: u.pathname + u.search,
-        headers: opts.headers,
+        // Connection: close keeps server.close() in the teardown hook from
+        // waiting out the keep-alive timeout on an idle socket.
+        headers: { Connection: 'close', ...opts.headers },
       },
       (res) => {
         const chunks: Buffer[] = [];

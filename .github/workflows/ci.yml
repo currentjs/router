@@ -24,3 +24,22 @@ jobs:
 
       - name: Run tests
         run: npm run test:all
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # --test-coverage-exclude needs Node >= 22.5; the test job keeps
+          # covering the supported minimum (18).
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Report coverage
+        run: npm run test:coverage:src
