@@ -1,0 +1,152 @@
+# @currentjs/router Roadmap
+
+## Current State
+
+Published: **0.2.2** (2026-08-07).
+
+0.2.x shipped HTTP error classes, structured request logging, specificity-based route matching
+(declaration order no longer matters), directory-index serving (`index.html` as `/`), and a first
+unit + integration test suite. The README now covers the error classes, the matching rules, and
+index-file resolution.
+
+Two structural gaps still shape most of the work below:
+
+1. **No response control.** `IContext.response` is declared and initialized, but never read by the
+   server. Handlers cannot set a status code, a header, or a cookie. Success is always `200`, and the
+   content type is inferred solely from `typeof result`. This is why `@currentjs/gen` implements
+   redirects and cookie-setting in client-side `web/app.js` instead of on the server.
+2. **No middleware or guards.** There is no place to put CORS, rate limiting, security headers, or
+   auth checks, so every generated controller method re-emits the same authentication preamble.
+
+## Shipped
+
+| Feature                          | Release | Size | Notes                                                                                                      |
+|----------------------------------|---------|------|------------------------------------------------------------------------------------------------------------|
+| HTTP error handling              | 0.2.0   | M    | Error classes + `BaseHttpError` mapping in the server; used by the generator                                |
+| Request logging                  | 0.2.0   | M    | Structured JSON per request (`traceId`, method, path, headers, bodySize)                                    |
+| `X-Layout` header                | 0.1.3   | S    | Set on rendered responses (still unconditional — see Known Issues)                                          |
+| `authToken` cookie fallback      | 0.1.2   | S    | JWT also accepted from the `authToken` cookie when `Authorization` is absent                                |
+| First test suite                 | 0.2.1   | M    | Unit tests for routing/decorators; integration tests for the server and JWT happy path                      |
+| Route specificity matching       | 0.2.2   | M    | Static-first O(1) lookup, then params sorted by specificity — route declaration order no longer matters     |
+| Directory index as `/`           | 0.2.2   | S    | `index.html` (and `indexFiles`) served for `/` and directory paths                                          |
+| README catch-up                  | 0.2.2   | S    | Error classes, matching rules, and index-file resolution documented                                         |
+
+## Next Releases
+
+| Feature                            | Release | Size | Notes                                                                                                         |
+|------------------------------------|---------|------|---------------------------------------------------------------------------------------------------------------|
+| Complete the error API             | 0.3.0   | S    | Export `BaseHttpError`; add `422`; alias `ServiceNotAvailableError` → `ServiceUnavailableError`               |
+| Remaining README gaps              | 0.3.0   | S    | Still omitted: the `authToken` cookie fallback and the `X-Layout` header                                      |
+| **JWT expiry validation**          | 0.3.0   | S    | **Security.** `exp`/`nbf` are never checked — expired tokens are accepted permanently                         |
+| Stop leaking internals             | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws return `error.message` verbatim with 500; log the stack instead      |
+| Body size limit                    | 0.3.0   | S    | **Security.** Body is buffered unbounded; cap it and return `413`                                             |
+| Decorator metadata isolation       | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
+| URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
+| `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
+| Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
+| JWT configuration                  | 0.3.1   | S    | Secret / cookie name / allowed algorithms as options, not ambient env reads; case-insensitive `Bearer`        |
+| Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
+| Request lifecycle robustness       | 0.3.2   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                    |
+| Graceful shutdown + timeouts       | 0.3.2   | S    | `closeIdleConnections` + drain timeout; expose `requestTimeout`/`headersTimeout`                              |
+| Static file overhaul               | 0.3.3   | L    | See Known Issues — caching, `Content-Length`, async `fs`, dotfile denial, MIME gaps, header-sent guard        |
+| Test coverage                      | 0.3.0   | L    | Backfill traversal, JWT rejection/`exp`, error mapping, partial content, body parsing; add coverage reporting |
+| **Response API**                   | 0.4.0   | L    | Make `context.response` real: `status`, `headers`, `cookies`, `redirect()`, `Buffer`/`Stream` returns         |
+| gen alignment for responses        | 0.4.0   | M    | Lets `gen` emit `201 Location`, `204`, server-side redirects, and `Set-Cookie`; removes the client-side hack  |
+| Middleware / hook pipeline         | 0.5 ?   | L    | [ under rethinking ] `onRequest` / `preHandler` / `onSend` / `onError`, per-controller and per-route          |
+| CORS, security headers, rate limit | 0.5.0   | M    | First-party opt-in middleware built on the pipeline                                                           |
+| File uploads                       | 0.6     | L    | Multipart + streaming                                                                                         |
+| Structured validation errors       | 0.6     | S    | `details` payload on errors so DTO field errors reach the client                                              |
+| WebSocket support                  | 0.7     | L    | Requires exposing the underlying `http.Server` for `upgrade`                                                  |
+| Dual ESM/CJS + `exports` map       | 1.0     | M    | CJS-only today, while generated apps are `"type": "module"`                                                   |
+| Stage-3 decorator support          | 1.0     | M    | `tsconfig.json` omits `experimentalDecorators`, so shipped types are legacy 3-arg signatures                  |
+| Expose `server` / `address()`      | 1.0     | S    | Prerequisite for WebSockets and cleaner testing                                                               |
+| Move `IProvider` out               | 1.0     | S    | [ can be rethought ] Belongs in `@currentjs/provider`, not here                                               |
+
+---
+
+**Size Legend:** S = Small, M = Medium, L = Large, XL = Extra Large
+
+---
+
+## Known Issues
+
+Each item is tagged with the release that is planned to fix it.
+
+### Security
+
+- **Expired JWTs are accepted indefinitely.** *(0.2.3)*
+  `extractUserFromAuthorizationHeader` verifies the HS256 signature but ignores `exp`, `nbf`, and
+  `iat`. A token with `exp` in 2020 still authenticates.
+- **Tokens are logged in plaintext.** *(0.2.3)*
+  The per-request log writes `req.headers` wholesale, which includes `authorization` and `cookie`.
+- **Internal error messages reach clients.** *(0.2.3)*
+  A driver error such as `ER_BAD_FIELD_ERROR: Unknown column 'x'` is returned verbatim with a 500,
+  while the stack is dropped from the log.
+- **Unbounded request body.** *(0.2.3 size cap; 0.3 `error`/`aborted`)*
+  No size cap, and no `error`/`aborted` handler on `req`, so a client that disconnects mid-upload
+  leaves the body promise pending forever.
+- **Dotfiles are served** from the static directory. *(0.3)*
+- No `requestTimeout` / `headersTimeout` configuration (slowloris exposure). *(0.3)*
+
+### Correctness
+
+- **Decorator metadata leaks across a class hierarchy.** *(0.3)*
+  `defineRoute` tests `if (!target.constructor.routes)`, which resolves the base class's array
+  through the prototype chain and pushes into it. Two sibling controllers extending a common base
+  each end up serving all of the hierarchy's routes. `@Controller`'s `basePath` is inherited the
+  same way, so a subclass without the decorator silently adopts its parent's prefix. Fix with
+  own-property checks and copy-on-write.
+- **`listen()` never handles the server's `error` event.** *(0.3)*
+  A port collision emits an unhandled `'error'` and crashes the process instead of rejecting the
+  promise.
+- **Static-file errors after headers are sent.** *(0.3)*
+  `serveStaticFile` resolves `false` on a stream error even though it may already have piped into
+  `res`; the caller then sets `statusCode = 404` and throws `ERR_HTTP_HEADERS_SENT`, and the outer
+  catch throws again on the retry.
+- **A catch-all route disables static serving.** *(0.3)*
+  Static files are only attempted after the route table misses, so any controller declaring
+  `@Get('/:slug')` swallows every asset request.
+- **Multi-slash paths are not normalized.** *(0.3)*
+  The path join uses a non-global regex, so only the first run of slashes collapses; `@Get('//dup')`
+  under `/api` registers as `GET /api//dup`.
+- **`statSync` blocks the event loop** on the request path, several times during index resolution.
+  *(0.3)*
+- **Path params are never URL-decoded.** *(0.3)*
+  `/users/john%40doe.com` yields the encoded string, and static files with spaces or unicode in
+  their names are unreachable.
+
+### Static files
+
+*(0.3)* No `Content-Length`, `ETag`, `Last-Modified`, `Cache-Control`, or conditional-request
+(`304`) support — every asset is fully re-downloaded on every page load. No `Range` requests and no
+precompressed serving. The MIME map is missing `.mjs`, `.webp`, `.avif`, `.wasm`, `.map`, `.xml`,
+and `.webmanifest`, so browser ESM modules are served as `application/octet-stream`.
+
+### API surface
+
+- `BaseHttpError` is not exported, so consumers cannot `instanceof`-check it or define custom errors.
+  *(0.2.3)*
+- `422 Unprocessable Content` is missing — the one status the generated DTOs actually need. *(0.2.3)*
+- `parameters` is typed `Record<string, string | number>`, but path params are always strings and
+  repeated query params are arrays. *(0.3)*
+- `HttpMethod` omits `HEAD` and `OPTIONS`. *(0.3)*
+- `traceId` uses `Math.random()`, is not returned as a response header, and is not exposed on the
+  context, so handlers cannot correlate their own logs with it. *(0.2.3)*
+- `X-Layout` is set unconditionally on rendered responses, exposing internal template names. *(0.4)*
+- `close()` does not drop keep-alive sockets, so the `SIGTERM` handler in generated apps can hang.
+  *(0.3)*
+
+## Coordination Notes
+
+Generated `package.json` pins `'@currentjs/router': 'latest'`. Every change here ships into every
+existing app with no semver protection — switch to a caret range in `@currentjs/gen` before landing
+behavioral changes.
+
+The 0.4 and 0.5 releases are the ones that let `gen` **delete** code rather than accumulate more
+workarounds:
+
+- 0.4 (response API) removes the client-side redirect strategy and the JavaScript cookie write on
+  login. It also fixes the existing mismatch where templates emit `data-redirect` but
+  `handleFormSuccess` reads `data-base-path`.
+- 0.5 (guards) replaces the five-line auth preamble currently inlined into every generated handler,
+  and closes the gap where `auth: owner` on a custom action only checks authentication.
