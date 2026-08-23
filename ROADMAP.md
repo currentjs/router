@@ -30,7 +30,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged      |
 | ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs    |
 | ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
-| URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
+| ✅ URL decoding                     | 0.3.0   | S    | Request path is decoded once (`decodeURIComponent`) before routing/static lookup; malformed encoding → `400`  |
 | `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
 | Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
 | ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
@@ -103,9 +103,12 @@ The path join uses a non-global regex, so only the first run of slashes collapse
 under `/api` registers as `GET /api//dup`.
 - `**statSync` blocks the event loop** on the request path, several times during index resolution.
 *(0.3.3)*
-- **Path params are never URL-decoded.** *(0.3.0)*
-`/users/john%40doe.com` yields the encoded string, and static files with spaces or unicode in
-their names are unreachable.
+- ✅ **Path params are never URL-decoded.** *(0.3.0 — fixed)*
+The request pathname is now decoded once with `decodeURIComponent` right after `url.parse`, before
+route matching and static-file lookup, so `/users/john%40doe.com` reaches the handler as
+`john@doe.com` and static files with spaces or unicode in their names are servable. A malformed
+percent-escape (e.g. a trailing `%`) throws `BadRequestError` → `400` instead of crashing the
+request.
 
 ### Static files
 

@@ -7,7 +7,7 @@ import { join, resolve, sep } from 'path';
 import { RouteDefinition, HttpMethod, getOwnRoutes, getOwnBasePath, getOwnRenders } from '../decorators/RouteDecorators';
 import type { IContext } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
-import { ContentTooLargeError } from '../errors/HttpErrors';
+import { BadRequestError, ContentTooLargeError } from '../errors/HttpErrors';
 import { extractUserFromRequest, resolveJwtOptions } from '../utils/auth';
 import type { JwtOptions } from '../types/jwt';
 
@@ -306,7 +306,13 @@ export function createWebServer(
     try {
       const method = (req.method || 'GET').toUpperCase() as HttpMethod;
       const { pathname = '/', query } = parseUrl(req.url || '/', true);
-      const path = normalizePath(pathname ?? '/');
+      let decodedPathname: string;
+      try {
+        decodedPathname = decodeURIComponent(pathname ?? '/');
+      } catch {
+        throw new BadRequestError('Malformed URL encoding in request path');
+      }
+      const path = normalizePath(decodedPathname);
 
       // A body over the cap short-circuits to a 413 below. The socket is never destroyed
       // mid-stream — killing it here would take the response down with it — instead the

@@ -183,6 +183,30 @@ describe('createWebServer functional', () => {
     expect(res.status).toBe(404);
     expect(res.json).toEqual({ error: 'Not Found' });
   });
+
+  it('URL-decodes path params before they reach the handler', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/John%20Doe`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ message: 'Hello John Doe' });
+  });
+
+  it('URL-decodes special characters (%40) in path params', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/john%40doe.com`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ message: 'Hello john@doe.com' });
+  });
+
+  it('URL-decodes static file paths (space in filename)', async () => {
+    writeFileSync(join(tmpDir, 'my file.html'), '<html><body>Spaced</body></html>', 'utf8');
+    const res = await request('GET', `${baseUrl}/my%20file.html`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Spaced');
+  });
+
+  it('returns 400 for malformed percent-encoding in the request path', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/broken%`);
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('body size limit', () => {

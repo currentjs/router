@@ -130,6 +130,11 @@ async getUserPost(ctx: IContext) {
 }
 ```
 
+The request path is URL-decoded once, before routing and static-file lookup. `GET /users/john%40doe.com`
+delivers `userId === 'john@doe.com'`, and a static file with a space or unicode in its name (e.g.
+`my file.html`) is reachable via its encoded URL. A malformed percent-escape in the path (e.g. a bare
+trailing `%`) is rejected with `400 Bad Request` before any route is matched.
+
 ## Route Matching Order
 
 Declaration order does not matter. The router always resolves routes by specificity:
