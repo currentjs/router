@@ -93,6 +93,51 @@ interface RouteTable {
   staticRoutes: Map<string, RouteTableEntry>;
   /** Parametric routes, pre-sorted by specificity (most specific first). */
   dynamicRoutes: RouteTableEntry[];
+  /** Static path (method-independent) -> set of methods registered for it. Used for `405`/`OPTIONS`. */
+  staticPathMethods: Map<string, Set<HttpMethod>>;
+}
+
+/**
+ * Collect every HTTP method registered for `path`, across both static and
+ * parametric routes, regardless of which method the current request used.
+ * An empty set means the path isn't registered by any controller at all
+ * (so the caller should fall back to static-file serving / `404`), while a
+ * non-empty set that doesn't contain the request's method means `405`.
+ */
+function getAllowedMethodsForPath(
+  path: string,
+  staticPathMethods: Map<string, Set<HttpMethod>>,
+  dynamicRoutes: RouteTableEntry[]
+): Set<HttpMethod> {
+  const methods = new Set<HttpMethod>(staticPathMethods.get(path) ?? []);
+  for (const entry of dynamicRoutes) {
+    if (entry.matcher.regex.test(path)) {
+      methods.add(entry.route.method);
+    }
+  }
+  return methods;
+}
+
+/** `GET` implies `HEAD` support, and every registered path answers `OPTIONS`. */
+function buildAllowHeader(methods: Set<HttpMethod>): string {
+  const withImplied = new Set(methods);
+  if (withImplied.has('GET')) withImplied.add('HEAD');
+  withImplied.add('OPTIONS');
+  return Array.from(withImplied).sort().join(', ');
+}
+
+/**
+ * Ends the response, omitting the body for `HEAD` requests while still
+ * reporting the `Content-Length` the equivalent `GET`/etc. response would
+ * have had.
+ */
+function endResponse(res: ServerResponse, body: string, isHeadRequest: boolean): void {
+  if (isHeadRequest) {
+    res.setHeader('Content-Length', Buffer.byteLength(body));
+    res.end();
+  } else {
+    res.end(body);
+  }
 }
 
 /**
@@ -131,6 +176,7 @@ function warnInheritedMetadata(ctor: any): void {
 export function buildRouteTable(controllers: any[]): RouteTable {
   const staticRoutes = new Map<string, RouteTableEntry>();
   const dynamicRoutes: RouteTableEntry[] = [];
+  const staticPathMethods = new Map<string, Set<HttpMethod>>();
   let registrationIndex = 0;
 
   for (const controllerInstance of controllers) {
@@ -162,6 +208,10 @@ export function buildRouteTable(controllers: any[]): RouteTable {
         if (!staticRoutes.has(key)) {
           staticRoutes.set(key, entry);
         }
+        if (!staticPathMethods.has(fullPath)) {
+          staticPathMethods.set(fullPath, new Set());
+        }
+        staticPathMethods.get(fullPath)!.add(route.method);
       } else {
         dynamicRoutes.push(entry);
       }
@@ -169,7 +219,7 @@ export function buildRouteTable(controllers: any[]): RouteTable {
   }
 
   dynamicRoutes.sort(compareRouteSpecificity);
-  return { staticRoutes, dynamicRoutes };
+  return { staticRoutes, dynamicRoutes, staticPathMethods };
 }
 
 function compilePathToRegex(path: string) {
@@ -198,7 +248,8 @@ async function serveStaticFile(
   rootDir: string, 
   requestPath: string, 
   res: ServerResponse, 
-  indexFiles: string[] = ['index.html']
+  indexFiles: string[] = ['index.html'],
+  isHeadRequest: boolean = false
 ): Promise<boolean> {
   try {
     const base = resolve(rootDir);
@@ -239,6 +290,13 @@ async function serveStaticFile(
     const contentType = getContentType(ext);
     
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', stats.size);
+
+    if (isHeadRequest) {
+      res.end();
+      return true;
+    }
+
     const stream = createReadStream(target);
     
     return new Promise((resolve) => {
@@ -296,12 +354,15 @@ export function createWebServer(
   { controllers, webDir }: { controllers: any[], webDir?: string },
   options: WebServerOptions = {}
 ) {
-  const { staticRoutes, dynamicRoutes } = buildRouteTable(controllers);
+  const { staticRoutes, dynamicRoutes, staticPathMethods } = buildRouteTable(controllers);
   const jwtOpts = options.jwt !== false ? resolveJwtOptions(options.jwt ?? {}) : false;
   const maxBodySize = options.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
     const traceId = generateTraceId();
+    // Computed unconditionally (ahead of any parsing that might throw) so both the inner
+    // and outer catch blocks can still send a bodyless response to a HEAD request.
+    const isHeadRequest = (req.method || 'GET').toUpperCase() === 'HEAD';
 
     try {
       const method = (req.method || 'GET').toUpperCase() as HttpMethod;
@@ -376,8 +437,12 @@ export function createWebServer(
 
       let matched: MatchedRoute | null = null;
 
+      // HEAD is never declared explicitly on a controller — it reuses whatever GET
+      // route is registered for the same path, and the response body is dropped later on.
+      const matchMethod: HttpMethod = isHeadRequest ? 'GET' : method;
+
       // Phase 1: O(1) lookup for fully-static routes (no path parameters).
-      const staticEntry = staticRoutes.get(buildRouteKey(method, path));
+      const staticEntry = staticRoutes.get(buildRouteKey(matchMethod, path));
       if (staticEntry) {
         matched = { controllerInstance: staticEntry.controllerInstance, route: staticEntry.route, params: {} };
       }
@@ -385,7 +450,7 @@ export function createWebServer(
       // Phase 2: scan parametric routes (sorted by specificity, most specific first).
       if (!matched) {
         for (const entry of dynamicRoutes) {
-          if (entry.route.method !== method) continue;
+          if (entry.route.method !== matchMethod) continue;
           const match = entry.matcher.regex.exec(path);
           if (match) {
             const params: Record<string, string> = {};
@@ -397,10 +462,42 @@ export function createWebServer(
       }
 
       if (!matched) {
-        // Try to serve static files if staticDir is configured
+        // The path is registered by at least one controller, just not for this method
+        // (or, for OPTIONS, at all) — that's a 405/preflight, not a 404.
+        const allowedMethods = getAllowedMethodsForPath(path, staticPathMethods, dynamicRoutes);
+
+        if (allowedMethods.size > 0) {
+          const allowHeader = buildAllowHeader(allowedMethods);
+
+          if (method === 'OPTIONS') {
+            res.statusCode = 204;
+            res.setHeader('Allow', allowHeader);
+            res.end();
+            console.log(JSON.stringify({
+              timestamp: generateTimestamp(),
+              traceId,
+              response: '204 (OPTIONS preflight)'
+            }))
+            return;
+          }
+
+          res.statusCode = 405;
+          res.setHeader('Allow', allowHeader);
+          res.setHeader('Content-Type', 'application/json');
+          endResponse(res, JSON.stringify({ error: 'Method Not Allowed' }), isHeadRequest);
+          console.log(JSON.stringify({
+            timestamp: generateTimestamp(),
+            traceId,
+            response: '405 (application/json)'
+          }))
+          return;
+        }
+
+        // Try to serve static files if staticDir is configured (GET/HEAD only — there is
+        // no meaningful static-file response to POST/PUT/etc.)
         const staticDir = options.staticDir || webDir;
-        if (staticDir) {
-          const served = await serveStaticFile(staticDir, path, res, options.indexFiles);
+        if (staticDir && (method === 'GET' || isHeadRequest)) {
+          const served = await serveStaticFile(staticDir, path, res, options.indexFiles, isHeadRequest);
           if (served) {
             console.log(JSON.stringify({
               timestamp: generateTimestamp(),
@@ -413,7 +510,7 @@ export function createWebServer(
 
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Not Found' }));
+        endResponse(res, JSON.stringify({ error: 'Not Found' }), isHeadRequest);
         console.log(JSON.stringify({
           timestamp: generateTimestamp(),
           traceId,
@@ -474,7 +571,7 @@ export function createWebServer(
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('X-Layout', maybeRoute.render.layout || '');
-          res.end(html);
+          endResponse(res, html, isHeadRequest);
           console.log(JSON.stringify({
             timestamp: generateTimestamp(),
             traceId,
@@ -487,7 +584,7 @@ export function createWebServer(
         const contentType = typeof result === 'string' ? 'text/plain; charset=utf-8' : 'application/json';
         res.statusCode = 200;
         res.setHeader('Content-Type', contentType);
-        res.end(responseBody);
+        endResponse(res, responseBody, isHeadRequest);
         console.log(JSON.stringify({
           timestamp: generateTimestamp(),
           traceId,
@@ -522,7 +619,7 @@ export function createWebServer(
             const html = await renderer(options.errorTemplate, errorData, layoutToUse);
             res.statusCode = statusCode;
             res.setHeader('Content-Type', 'text/html; charset=utf-8');
-            res.end(html);
+            endResponse(res, html, isHeadRequest);
             return;
           } catch (renderError) {
             console.error('Error template rendering failed:', renderError);
@@ -531,7 +628,7 @@ export function createWebServer(
 
         res.statusCode = statusCode;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: clientMessage }));
+        endResponse(res, JSON.stringify({ error: clientMessage }), isHeadRequest);
       }
     } catch (error: any) {
       const isHttpError = error instanceof BaseHttpError;
@@ -548,7 +645,7 @@ export function createWebServer(
 
       res.statusCode = statusCode;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: clientMessage }));
+      endResponse(res, JSON.stringify({ error: clientMessage }), isHeadRequest);
     }
   };
 

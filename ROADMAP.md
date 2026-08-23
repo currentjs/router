@@ -31,7 +31,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs    |
 | ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | ✅ URL decoding                     | 0.3.0   | S    | Request path is decoded once (`decodeURIComponent`) before routing/static lookup; malformed encoding → `400`  |
-| `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
+| ✅ `405` / `HEAD` / `OPTIONS`       | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
 | Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
 | ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
 | Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
@@ -121,7 +121,9 @@ and `.webmanifest`, so browser ESM modules are served as `application/octet-stre
 
 - `parameters` is typed `Record<string, string | number>`, but path params are always strings and
 repeated query params are arrays. *(0.3.0)*
-- `HttpMethod` omits `HEAD` and `OPTIONS`. *(0.3.0)*
+- ✅ **`HttpMethod` omits `HEAD` and `OPTIONS`.** *(0.3.0 — fixed)*
+Both are now part of the `HttpMethod` union; `HEAD` is resolved by matching the equivalent `GET`
+route (or static file) and `OPTIONS` is answered automatically from the route table.
 - `traceId` uses `Math.random()`, is not returned as a response header, and is not exposed on the
 context, so handlers cannot correlate their own logs with it. *(0.3.1)*
 - `X-Layout` is set unconditionally on rendered responses, exposing internal template names.

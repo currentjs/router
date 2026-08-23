@@ -35,6 +35,7 @@ npm i @currentjs/router
 
 - **Decorators**: `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Render`, `@Controller`
 - **Dynamic routing**: Path parameters like `/users/:id`
+- **Automatic `HEAD`/`OPTIONS`**: Method mismatches get an `Allow` header instead of a bare `404`; `OPTIONS` preflights and `HEAD` requests need no extra code
 - **JWT Authentication**: Built-in JWT parsing and user context (HS256/HS384/HS512), `exp`/`nbf`/`iat` validated, from the `Authorization` header or the `authToken` cookie
 - **Static file serving**: With path traversal protection
 - **Template rendering**: SSR support with layouts and partial content for SPAs
@@ -157,6 +158,46 @@ class ItemsController {
   async getNew() { ... }
 }
 ```
+
+## Method Handling: `HEAD` / `OPTIONS`
+
+The router is aware of every method registered for a given path, not just the one that matched:
+
+| Situation | Result |
+|---|---|
+| Path is registered, but not for the request's method | `405 Method Not Allowed` with an `Allow` header listing every method the path *does* support |
+| `OPTIONS` request to a registered path | `204 No Content` with an `Allow` header — no controller code runs |
+| `HEAD` request to a path with a `GET` route (or a static file) | The matching `GET` handler (or file) runs as usual, but the response body is omitted — headers, status code, and `Content-Length` are identical to what `GET` would have returned |
+| Path matches no route/static file for *any* method | `404 Not Found`, same as before |
+
+```ts
+@Controller('/api/posts')
+class PostsController {
+  @Get('/')
+  async list() { /* ... */ }
+
+  @Post('/')
+  async create() { /* ... */ }
+}
+```
+
+With the controller above:
+
+```http
+DELETE /api/posts/
+→ 405 Method Not Allowed
+  Allow: GET, HEAD, OPTIONS, POST
+
+OPTIONS /api/posts/
+→ 204 No Content
+  Allow: GET, HEAD, OPTIONS, POST
+
+HEAD /api/posts/
+→ 200 OK (same headers `GET /api/posts/` would send, empty body)
+```
+
+There is no `@Head` or `@Options` decorator — both are derived automatically from the routes a
+controller already declares with `@Get`/`@Post`/etc., so there's nothing extra to configure.
 
 ## Authentication (JWT)
 
