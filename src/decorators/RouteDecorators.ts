@@ -10,9 +10,24 @@ export interface ControllerOptions {
   // Reserved for future options
 }
 
+function hasOwnMeta(ctor: any, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ctor, key);
+}
+
+export function getOwnRoutes(ctor: any): RouteDefinition[] {
+  return hasOwnMeta(ctor, 'routes') ? (ctor.routes as RouteDefinition[]) : [];
+}
+
+export function getOwnBasePath(ctor: any): string {
+  return hasOwnMeta(ctor, 'basePath') ? (ctor.basePath as string) : '';
+}
+
+export function getOwnRenders(ctor: any): Record<string, RenderDefinition> {
+  return hasOwnMeta(ctor, 'renders') ? (ctor.renders as Record<string, RenderDefinition>) : {};
+}
+
 export function Controller(basePath: string = '', _options: ControllerOptions = {}) {
   return function (target: any) {
-    // Attach basePath metadata directly on the constructor
     target.basePath = basePath || '';
   };
 }
@@ -20,10 +35,11 @@ export function Controller(basePath: string = '', _options: ControllerOptions = 
 function defineRoute(method: HttpMethod) {
   return function (path: string) {
     return function (target: any, propertyKey: string, _descriptor: PropertyDescriptor) {
-      if (!target.constructor.routes) {
-        target.constructor.routes = [] as RouteDefinition[];
+      const ctor = target.constructor;
+      if (!hasOwnMeta(ctor, 'routes')) {
+        ctor.routes = [] as RouteDefinition[];
       }
-      (target.constructor.routes as RouteDefinition[]).push({
+      (ctor.routes as RouteDefinition[]).push({
         method,
         path,
         handler: propertyKey
@@ -45,13 +61,13 @@ export interface RenderDefinition {
 
 export function Render(template: string, layout?: string) {
   return function (target: any, propertyKey: string, _descriptor: PropertyDescriptor) {
-    if (!target.constructor.renders) {
-      target.constructor.renders = {} as Record<string, RenderDefinition>;
+    const ctor = target.constructor;
+    if (!hasOwnMeta(ctor, 'renders')) {
+      ctor.renders = {} as Record<string, RenderDefinition>;
     }
-    (target.constructor.renders as Record<string, RenderDefinition>)[propertyKey] = {
+    (ctor.renders as Record<string, RenderDefinition>)[propertyKey] = {
       template,
       layout
     };
   };
 }
-

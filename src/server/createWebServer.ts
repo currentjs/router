@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { parse as parseUrl } from 'url';
 import { createReadStream, statSync } from 'fs';
 import { join, resolve, sep } from 'path';
-import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
+import { RouteDefinition, HttpMethod, getOwnRoutes, getOwnBasePath, getOwnRenders } from '../decorators/RouteDecorators';
 import type { IContext } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
 import { ContentTooLargeError } from '../errors/HttpErrors';
@@ -95,6 +95,39 @@ interface RouteTable {
   dynamicRoutes: RouteTableEntry[];
 }
 
+/**
+ * Walk the prototype chain above `ctor` (excluding Object) and return the
+ * first ancestor that owns the given metadata key, or `null` if none do.
+ */
+function findAncestorWithOwnMeta(ctor: any, key: string): any | null {
+  let proto = Object.getPrototypeOf(ctor);
+  while (proto && proto !== Function.prototype) {
+    if (Object.prototype.hasOwnProperty.call(proto, key)) return proto;
+    proto = Object.getPrototypeOf(proto);
+  }
+  return null;
+}
+
+function warnInheritedMetadata(ctor: any): void {
+  const name = ctor.name || '(anonymous)';
+  const hasOwnRoutes = Object.prototype.hasOwnProperty.call(ctor, 'routes');
+  const hasOwnBase = Object.prototype.hasOwnProperty.call(ctor, 'basePath');
+
+  if (!hasOwnRoutes && findAncestorWithOwnMeta(ctor, 'routes')) {
+    console.warn(
+      `[router] ${name}: route decorators are not inherited. ` +
+      `Re-declare @Get/@Post/… directly on ${name}, or register the base class as a controller instead.`
+    );
+  }
+  if (hasOwnRoutes && !hasOwnBase && findAncestorWithOwnMeta(ctor, 'basePath')) {
+    console.warn(
+      `[router] ${name}: @Controller is not inherited. ` +
+      `Routes on ${name} will be registered without the ancestor's base path prefix. ` +
+      `Add @Controller('…') to ${name} to set an explicit prefix.`
+    );
+  }
+}
+
 export function buildRouteTable(controllers: any[]): RouteTable {
   const staticRoutes = new Map<string, RouteTableEntry>();
   const dynamicRoutes: RouteTableEntry[] = [];
@@ -102,9 +135,12 @@ export function buildRouteTable(controllers: any[]): RouteTable {
 
   for (const controllerInstance of controllers) {
     const controllerCtor = Object.getPrototypeOf(controllerInstance).constructor;
-    const routes: RouteDefinition[] = controllerCtor.routes || [];
-    const basePath: string = controllerCtor.basePath || '';
-    const renders: Record<string, { template: string; layout?: string }> = controllerCtor.renders || {};
+
+    warnInheritedMetadata(controllerCtor);
+
+    const routes: RouteDefinition[] = getOwnRoutes(controllerCtor);
+    const basePath: string = getOwnBasePath(controllerCtor);
+    const renders: Record<string, { template: string; layout?: string }> = getOwnRenders(controllerCtor);
 
     for (const route of routes) {
       const fullPath = normalizePath(`${normalizePath(basePath)}${normalizePath(route.path)}`.replace(/\/+/, '/'));

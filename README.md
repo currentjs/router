@@ -96,6 +96,12 @@ class MyController {
 }
 ```
 
+### Inheritance
+
+Decorator metadata is **per-class** and is never inherited. Each controller class must declare its own `@Controller`, `@Get`/`@Post`/… and `@Render` decorators. A subclass that omits `@Controller` registers its routes without any prefix; a subclass with no method decorators registers no routes at all — even if the base class has some.
+
+Shared logic should live in plain (undecorated) helper methods or a shared service, not in a decorated base class that is also registered as a controller.
+
 ### Render Decorator
 ```ts
 @Controller('/')

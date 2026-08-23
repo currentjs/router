@@ -29,7 +29,7 @@ Two structural gaps still shape most of the work below:
 | ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                          |
 | ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged      |
 | ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs    |
-| Decorator metadata isolation       | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
+| ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
 | `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
 | Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
@@ -80,12 +80,14 @@ mid-upload (within the size cap) leaves the body promise pending forever — tra
 
 ### Correctness
 
-- **Decorator metadata leaks across a class hierarchy.** *(0.3.0)*
-`defineRoute` tests `if (!target.constructor.routes)`, which resolves the base class's array
-through the prototype chain and pushes into it. Two sibling controllers extending a common base
-each end up serving all of the hierarchy's routes. `@Controller`'s `basePath` is inherited the
-same way, so a subclass without the decorator silently adopts its parent's prefix. Fix with
-own-property checks and copy-on-write.
+- ✅ **Decorator metadata leaks across a class hierarchy.** *(0.3.0 — fixed)*
+`defineRoute` and `@Render` now use `Object.prototype.hasOwnProperty` before initialising the
+metadata arrays/objects, so a subclass always gets its own fresh collection instead of appending
+to the base class's. The same own-property check is applied on the read side in `buildRouteTable`
+via exported `getOwnRoutes` / `getOwnBasePath` / `getOwnRenders` accessors. The chosen semantics
+are **strict isolation**: a class is routed by exactly what its own body declares; decorators are
+not inherited. `createWebServer` emits a `console.warn` when a registered controller has inherited
+metadata without overriding it, so the behaviour change does not fail silently as a 404.
 - `**listen()` never handles the server's `error` event.** *(0.3.2)*
 A port collision emits an unhandled `'error'` and crashes the process instead of rejecting the
 promise.
