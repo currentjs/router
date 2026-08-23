@@ -33,4 +33,6 @@ export {
 } from './errors/HttpErrors'
 
 export { createWebServer } from './server/createWebServer';
+export type { WebServerOptions } from './server/createWebServer';
 export type { IContext, IRequestContext, AuthenticatedUser, IProvider } from './types/IContext';
+export type { JwtAlgorithm, JwtOptions } from './types/jwt';

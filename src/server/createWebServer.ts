@@ -7,7 +7,8 @@ import { join, resolve, sep } from 'path';
 import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
 import type { IContext } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
-import { extractUserFromAuthorizationHeader } from "../utils/auth";
+import { extractUserFromRequest, resolveJwtOptions } from '../utils/auth';
+import type { JwtOptions } from '../types/jwt';
 
 // Controllers are now passed directly; basePath is derived from @Controller decorator on class
 
@@ -22,6 +23,12 @@ export interface WebServerOptions {
   staticDir?: string;
   indexFiles?: string[];
   errorTemplate?: string;
+  /**
+   * JWT verification options.
+   * Set to `false` to disable token extraction entirely (all requests are anonymous).
+   * Omit or pass `{}` to use defaults (HS256, `JWT_SECRET` env var, `authToken` cookie).
+   */
+  jwt?: JwtOptions | false;
 }
 
 interface MatchedRoute {
@@ -243,6 +250,7 @@ export function createWebServer(
   options: WebServerOptions = {}
 ) {
   const { staticRoutes, dynamicRoutes } = buildRouteTable(controllers);
+  const jwtOpts = options.jwt !== false ? resolveJwtOptions(options.jwt ?? {}) : false;
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
     const traceId = generateTraceId();
@@ -339,7 +347,7 @@ export function createWebServer(
           headers: headers,
           method,
           path,
-          user: extractUserFromAuthorizationHeader(headers)
+          user: undefined,
         },
         response: {}
       };
@@ -356,6 +364,12 @@ export function createWebServer(
       const isRenderableRoute = maybeRoute && maybeRoute.render && typeof renderer === 'function';
 
       try {
+        // Extract and verify JWT — throws UnauthorizedError when token is present but invalid,
+        // so the error flows through the inner catch and can render an errorTemplate for @Render routes.
+        if (jwtOpts !== false) {
+          context.request.user = extractUserFromRequest(headers, jwtOpts);
+        }
+
         const result = await handler(context);
 
         // If route has render metadata and a renderer exists in options, render HTML here

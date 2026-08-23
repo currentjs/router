@@ -26,14 +26,14 @@ Two structural gaps still shape most of the work below:
 | ✅ README catch-up                  | 0.2.2   | S    | Error classes, matching rules, and index-file resolution documented                                           |
 | ✅ Complete the error API           | 0.3.0   | S    | `BaseHttpError` exported; `412`, `417`, `422`, `428`, `431`, `502`, `504`, `505` added                        |
 | ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                     |
-| **JWT expiry validation**          | 0.3.0   | S    | **Security.** `exp`/`nbf` are never checked — expired tokens are accepted permanently                         |
+| ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                          |
 | Stop leaking internals             | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws return `error.message` verbatim with 500; log the stack instead      |
 | Body size limit                    | 0.3.0   | S    | **Security.** Body is buffered unbounded; cap it and return `413`                                             |
 | Decorator metadata isolation       | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
 | `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
 | Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
-| JWT configuration                  | 0.3.1   | S    | Secret / cookie name / allowed algorithms as options, not ambient env reads; case-insensitive `Bearer`        |
+| ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
 | Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
 | Request lifecycle robustness       | 0.3.2   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                    |
 | Graceful shutdown + timeouts       | 0.3.2   | S    | `closeIdleConnections` + drain timeout; expose `requestTimeout`/`headersTimeout`                              |
@@ -64,9 +64,6 @@ Each item is tagged with the release that is planned to fix it.
 
 ### Security
 
-- **Expired JWTs are accepted indefinitely.** *(0.3.0)*
-`extractUserFromAuthorizationHeader` verifies the HS256 signature but ignores `exp`, `nbf`, and
-`iat`. A token with `exp` in 2020 still authenticates.
 - **Tokens are logged in plaintext.** *(0.3.1)*
 The per-request log writes `req.headers` wholesale, which includes `authorization` and `cookie`.
 - **Internal error messages reach clients.** *(0.3.0)*
@@ -129,6 +126,14 @@ context, so handlers cannot correlate their own logs with it. *(0.3.1)*
 Generated `package.json` pins `'@currentjs/router': 'latest'`. Every change here ships into every
 existing app with no semver protection — switch to a caret range in `@currentjs/gen` before landing
 behavioral changes.
+
+The 0.3.0 change that rejects present-but-invalid tokens has an interaction with generated apps:
+`@currentjs/gen` stores the JWT in an `authToken` cookie with `max-age=31536000`. Once a token
+expires the cookie keeps being sent, causing 401s on every request — including public routes — until
+the cookie is cleared. Two follow-ups are needed:
+
+- **`web/app.js` in gen** — clear `authToken` (localStorage + cookie) whenever any response is 401.
+- **Switch gen's router pin** from `'latest'` to `'^0.3.0'` (see Coordination Note above).
 
 The 0.4 and 0.5 releases are the ones that let `gen` **delete** code rather than accumulate more
 workarounds:

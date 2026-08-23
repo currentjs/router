@@ -35,7 +35,7 @@ npm i @currentjs/router
 
 - **Decorators**: `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Render`, `@Controller`
 - **Dynamic routing**: Path parameters like `/users/:id`
-- **JWT Authentication**: Built-in JWT parsing and user context (HS256), from the `Authorization` header or the `authToken` cookie
+- **JWT Authentication**: Built-in JWT parsing and user context (HS256/HS384/HS512), `exp`/`nbf`/`iat` validated, from the `Authorization` header or the `authToken` cookie
 - **Static file serving**: With path traversal protection
 - **Template rendering**: SSR support with layouts and partial content for SPAs
 - **HTTPS support** in case of not having load balancer in front of the app.
@@ -147,48 +147,102 @@ class ItemsController {
 }
 ```
 
-## Authentication (JWT Magic)
+## Authentication (JWT)
 
-Just include a JWT token in the Authorization header and we'll parse it for you:
+Include a JWT in the `Authorization` header and the router parses and verifies it for you:
 
 ```ts
 // Request header: Authorization: Bearer your.jwt.token
 @Get('/profile')
 async getProfile(ctx: IContext) {
-  const user = ctx.request.user; // Parsed from JWT
+  const user = ctx.request.user; // Parsed from JWT, or undefined if no token was sent
   if (!user) {
     throw new UnauthorizedError('Authentication required');
   }
-  return { 
-    id: user.id, 
-    email: user.email, 
-    role: user.role 
-  };
+  return { id: user.id, email: user.email, role: user.role };
 }
 ```
 
-**JWT Requirements:**
-- Algorithm: HS256
-- Secret: Set `JWT_SECRET` environment variable
-- Standard claims: `id` (or `sub`), `role`, `email`
+### Anonymous vs. rejected
 
-### Where the Token Comes From
+The router distinguishes two cases:
 
-The router looks for the token in two places, in this order:
+| Situation | Result |
+|---|---|
+| No token present | `ctx.request.user` is `undefined`; request continues normally |
+| Token present but invalid/expired | `UnauthorizedError` (401) is thrown before the handler runs |
 
-1. The `Authorization` header, which must use the `Bearer ` scheme (the scheme name is matched case-insensitively).
-2. The **`authToken` cookie**, used only when the header is absent or does not carry a `Bearer ` token.
+This means public routes work without any change — they simply never receive a `user`. Routes that require authentication should check `ctx.request.user` and throw `UnauthorizedError` if it is absent.
+
+### Where the token comes from
+
+The router checks two places, in order:
+
+1. The `Authorization` header with the `Bearer` scheme (case-insensitive).
+2. The **`authToken` cookie**, only when the header carries no Bearer token.
 
 ```http
 Authorization: Bearer your.jwt.token
 Cookie: authToken=your.jwt.token
 ```
 
-The cookie fallback exists because of server-rendered pages: when a browser follows a link or submits a normal form, it cannot attach an `Authorization` header, so `@Render` routes would have no way of knowing who the user is. Generated apps therefore mirror the token into an `authToken` cookie at login and keep sending the header for API calls.
+The cookie fallback exists for server-rendered pages: a browser following a link or submitting a plain form cannot attach an `Authorization` header, so `@Render` routes would otherwise be unable to identify the user. Generated apps mirror the token into an `authToken` cookie at login and continue sending the header for API calls.
 
-The router only ever *reads* the cookie — it never sets or clears it, and it has no opinion on the cookie's `Path`, `Max-Age`, `HttpOnly`, or `SameSite` attributes. Writing it is your application's job (and until the response API lands in 0.4.0, that has to happen client-side).
+The router only ever *reads* the cookie — it never sets or clears it.
 
-Whichever source it came from, the token goes through the same checks: the header must declare `HS256`, and the signature must verify against `JWT_SECRET`. Failures are never fatal — a missing, malformed, or badly signed token simply leaves `ctx.request.user` as `undefined`, exactly like an anonymous request. Handlers that require a user must check for it themselves and throw `UnauthorizedError`.
+### JWT verification
+
+Every token goes through the same checks:
+
+- **Signature** — verified using HMAC with the configured secret.
+- **Algorithm** — must be listed in `algorithms` (default: `['HS256']`).
+- **`exp`** — if present, the token must not be expired (checked against the server clock).
+- **`nbf`** — if present, the token must already be valid.
+- **`iat`** — if present, must not be significantly in the future.
+- **`typ`** — if present, must be `'JWT'`; tokens that omit `typ` are accepted.
+
+Claims `id` (fallback: `sub`), `role` (default: `'user'`), and `email` are mapped onto `ctx.request.user`. All other payload fields are also available.
+
+### JWT options
+
+Pass a `jwt` object as part of `WebServerOptions` to configure verification:
+
+```ts
+import { createWebServer, type JwtOptions } from '@currentjs/router';
+
+const server = createWebServer(
+  { controllers },
+  {
+    jwt: {
+      secret: process.env.MY_JWT_SECRET,   // default: process.env.JWT_SECRET
+      cookieName: 'authToken',             // default: 'authToken'; false = disable cookie
+      algorithms: ['HS256'],               // default: ['HS256']; also 'HS384', 'HS512'
+      clockToleranceSec: 0,                // default: 0 — leeway for exp/nbf checks
+      requireExpiration: false,            // default: false — reject tokens with no exp
+    },
+  }
+);
+```
+
+Set `jwt: false` to disable token extraction entirely (all requests are anonymous):
+
+```ts
+createWebServer({ controllers }, { jwt: false });
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `secret` | `string \| Buffer` | `process.env.JWT_SECRET` | HMAC signing secret |
+| `cookieName` | `string \| false` | `'authToken'` | Cookie to check when header is absent; `false` disables the fallback |
+| `algorithms` | `JwtAlgorithm[]` | `['HS256']` | Allowed signing algorithms (`'HS256'`, `'HS384'`, `'HS512'`) |
+| `clockToleranceSec` | `number` | `0` | Seconds of leeway applied to `exp` (permissive) and `nbf` (permissive) |
+| `requireExpiration` | `boolean` | `false` | Reject tokens that do not include an `exp` claim |
+
+### Breaking-change note
+
+Prior to 0.3.0, a missing, malformed, or expired token was treated identically to no token: `ctx.request.user` was set to `undefined` and the request continued. From 0.3.0 onward, a *present-but-invalid* token throws `UnauthorizedError` before the handler runs.
+
+Generated apps (`@currentjs/gen`) store the token in an `authToken` cookie with `max-age=31536000`. If a user's token expires while the cookie is still present, every request — including public ones — will receive a 401 until the cookie is cleared. A planned follow-up (`web/app.js`) will clear the cookie on any 401 response automatically.
 
 ## Error Handling (HTTP Errors Made Easy)
 
