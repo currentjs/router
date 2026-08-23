@@ -1,5 +1,6 @@
 export { Get, Post, Put, Patch, Delete, Controller, Render } from './decorators/RouteDecorators';
 export type { HttpMethod, RouteDefinition, ControllerOptions, RenderDefinition } from './decorators/RouteDecorators';
+export { BaseHttpError } from './errors/BaseHttpError';
 export {
   BadRequestError,
   UnauthorizedError,
@@ -11,16 +12,24 @@ export {
   RequestTimeoutError,
   ConflictError,
   GoneError,
+  PreconditionFailedError,
   ContentTooLargeError,
   UriTooLongError,
   UnsupportedMediaTypeError,
+  ExpectationFailedError,
+  UnprocessableContentError,
   TooEarlyError,
   UpgradeRequiredError,
+  PreconditionRequiredError,
   TooManyRequestsError,
+  RequestHeaderFieldsTooLargeError,
   UnavailableForLegalReasonsError,
   InternalServerErrorError,
   NotImplementedError,
-  ServiceNotAvailableError
+  BadGatewayError,
+  ServiceNotAvailableError,
+  GatewayTimeoutError,
+  HttpVersionNotSupportedError
 } from './errors/HttpErrors'
 
 export { createWebServer } from './server/createWebServer';

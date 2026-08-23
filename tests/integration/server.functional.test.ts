@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from '../lib.js';
 import { Controller, Get, Post, Render } from '../../src/decorators/RouteDecorators.js';
 import { createWebServer } from '../../src/server/createWebServer.js';
+import { BaseHttpError } from '../../src/errors/BaseHttpError.js';
+import { GatewayTimeoutError, ServiceNotAvailableError, UnprocessableContentError } from '../../src/errors/HttpErrors.js';
 import * as http from 'http';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -85,6 +87,40 @@ class CatchAllController {
   }
 }
 
+class PaymentRequiredByCustomClassError extends BaseHttpError {
+  constructor(msg: string) {
+    super(402, msg);
+  }
+}
+
+@Controller('/errors')
+class ErrorController {
+  @Get('/unprocessable')
+  async unprocessable() {
+    throw new UnprocessableContentError('Title is required');
+  }
+
+  @Get('/unavailable')
+  async unavailable() {
+    throw new ServiceNotAvailableError('Maintenance');
+  }
+
+  @Get('/gateway-timeout')
+  async gatewayTimeout() {
+    throw new GatewayTimeoutError('Upstream did not answer');
+  }
+
+  @Get('/custom')
+  async custom() {
+    throw new PaymentRequiredByCustomClassError('Subscription expired');
+  }
+
+  @Get('/plain')
+  async plain() {
+    throw new Error('something went wrong');
+  }
+}
+
 describe('createWebServer functional', () => {
   let server: any;
   let baseUrl: string;
@@ -146,6 +182,53 @@ describe('createWebServer functional', () => {
     const res = await request('GET', `${baseUrl}/nope`);
     expect(res.status).toBe(404);
     expect(res.json).toEqual({ error: 'Not Found' });
+  });
+});
+
+describe('error mapping', () => {
+  let server: any;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const web = createWebServer({ controllers: [new ErrorController()] });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it('maps UnprocessableContentError to 422', async () => {
+    const res = await request('GET', `${baseUrl}/errors/unprocessable`);
+    expect(res.status).toBe(422);
+    expect(res.json).toEqual({ error: 'Title is required' });
+  });
+
+  it('maps ServiceNotAvailableError to 503', async () => {
+    const res = await request('GET', `${baseUrl}/errors/unavailable`);
+    expect(res.status).toBe(503);
+    expect(res.json).toEqual({ error: 'Maintenance' });
+  });
+
+  it('maps GatewayTimeoutError to 504', async () => {
+    const res = await request('GET', `${baseUrl}/errors/gateway-timeout`);
+    expect(res.status).toBe(504);
+    expect(res.json).toEqual({ error: 'Upstream did not answer' });
+  });
+
+  it('maps a consumer-defined BaseHttpError subclass to its own status', async () => {
+    const res = await request('GET', `${baseUrl}/errors/custom`);
+    expect(res.status).toBe(402);
+    expect(res.json).toEqual({ error: 'Subscription expired' });
+  });
+
+  it('maps a non-HTTP error to 500', async () => {
+    const res = await request('GET', `${baseUrl}/errors/plain`);
+    expect(res.status).toBe(500);
   });
 });
 

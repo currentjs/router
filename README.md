@@ -208,18 +208,47 @@ The error's `message` is returned as `{ "error": "<message>" }` (JSON routes) or
 | `RequestTimeoutError` | 408 |
 | `ConflictError` | 409 |
 | `GoneError` | 410 |
+| `PreconditionFailedError` | 412 |
 | `ContentTooLargeError` | 413 |
 | `UriTooLongError` | 414 |
 | `UnsupportedMediaTypeError` | 415 |
+| `ExpectationFailedError` | 417 |
+| `UnprocessableContentError` | 422 |
 | `TooEarlyError` | 425 |
 | `UpgradeRequiredError` | 426 |
+| `PreconditionRequiredError` | 428 |
 | `TooManyRequestsError` | 429 |
+| `RequestHeaderFieldsTooLargeError` | 431 |
 | `UnavailableForLegalReasonsError` | 451 |
 | `InternalServerErrorError` | 500 |
 | `NotImplementedError` | 501 |
+| `BadGatewayError` | 502 |
 | `ServiceNotAvailableError` | 503 |
+| `GatewayTimeoutError` | 504 |
+| `HttpVersionNotSupportedError` | 505 |
 
-All of them take a single `msg: string` constructor argument and extend the abstract `BaseHttpError` class (which exposes `getHTTPCode()`), in case you want to build your own custom error types on top of it.
+All of them take a single `msg: string` constructor argument and extend the abstract `BaseHttpError` class, which is exported too. Extend it for any status without a built-in class, and use it to recognize router errors:
+
+```ts
+import { BaseHttpError } from '@currentjs/router';
+
+class ImATeapotError extends BaseHttpError {
+  constructor(msg: string) {
+    super(418, msg);
+  }
+}
+
+try {
+  await doSomething();
+} catch (e) {
+  if (e instanceof BaseHttpError) {
+    console.error(e.name, e.getHTTPCode(), e.message);
+  }
+  throw e;
+}
+```
+
+`error.name` is the concrete class name (`'NotFoundError'`, `'ImATeapotError'`), so it survives logging.
 
 ## Template Rendering (SSR)
 
