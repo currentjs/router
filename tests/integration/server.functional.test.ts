@@ -226,9 +226,10 @@ describe('error mapping', () => {
     expect(res.json).toEqual({ error: 'Subscription expired' });
   });
 
-  it('maps a non-HTTP error to 500', async () => {
+  it('maps a non-HTTP error to 500 without leaking the internal error message', async () => {
     const res = await request('GET', `${baseUrl}/errors/plain`);
     expect(res.status).toBe(500);
+    expect(res.json).toEqual({ error: 'Internal Server Error' });
   });
 });
 

@@ -407,13 +407,17 @@ export function createWebServer(
       } catch (handlerError: any) {
         const isHttpError = handlerError instanceof BaseHttpError;
         const statusCode = isHttpError ? handlerError.getHTTPCode() : 500;
-        const errorMessage = handlerError?.message || 'Internal Server Error';
+        // Non-BaseHttpError throws are internal failures (driver errors, bugs, etc.) and must
+        // never reach the client verbatim — they may contain schema names, file paths, or other
+        // internals. Only a BaseHttpError's message is intentionally client-facing.
+        const clientMessage = isHttpError ? handlerError.message : 'Internal Server Error';
 
         console.log(JSON.stringify({
           timestamp: generateTimestamp(),
           traceId,
           errorCode: statusCode,
-          errorMessage
+          errorMessage: handlerError?.message || 'Unknown error',
+          ...(isHttpError ? {} : { stack: handlerError?.stack }),
         }))
 
         if (isRenderableRoute && options.errorTemplate) {
@@ -425,7 +429,7 @@ export function createWebServer(
             // Use layout only if it's not a partial request
             const layoutToUse = isPartialRequest ? undefined : maybeRoute.render.layout;
 
-            const errorData = { error: errorMessage, statusCode };
+            const errorData = { error: clientMessage, statusCode };
             const html = await renderer(options.errorTemplate, errorData, layoutToUse);
             res.statusCode = statusCode;
             res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -438,23 +442,24 @@ export function createWebServer(
 
         res.statusCode = statusCode;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: errorMessage }));
+        res.end(JSON.stringify({ error: clientMessage }));
       }
     } catch (error: any) {
       const isHttpError = error instanceof BaseHttpError;
       const statusCode = isHttpError ? error.getHTTPCode() : 500;
-      const errorMessage = error?.message || 'Internal Server Error';
+      const clientMessage = isHttpError ? error.message : 'Internal Server Error';
 
       console.log(JSON.stringify({
         timestamp: generateTimestamp(),
         traceId,
         errorCode: statusCode,
-        errorMessage,
+        errorMessage: error?.message || 'Unknown error',
+        ...(isHttpError ? {} : { stack: error?.stack }),
       }))
 
       res.statusCode = statusCode;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: errorMessage }));
+      res.end(JSON.stringify({ error: clientMessage }));
     }
   };
 

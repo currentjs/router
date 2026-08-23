@@ -27,7 +27,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Complete the error API           | 0.3.0   | S    | `BaseHttpError` exported; `412`, `417`, `422`, `428`, `431`, `502`, `504`, `505` added                        |
 | ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                     |
 | ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                          |
-| Stop leaking internals             | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws return `error.message` verbatim with 500; log the stack instead      |
+| ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged      |
 | Body size limit                    | 0.3.0   | S    | **Security.** Body is buffered unbounded; cap it and return `413`                                             |
 | Decorator metadata isolation       | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
@@ -66,9 +66,10 @@ Each item is tagged with the release that is planned to fix it.
 
 - **Tokens are logged in plaintext.** *(0.3.1)*
 The per-request log writes `req.headers` wholesale, which includes `authorization` and `cookie`.
-- **Internal error messages reach clients.** *(0.3.0)*
-A driver error such as `ER_BAD_FIELD_ERROR: Unknown column 'x'` is returned verbatim with a 500,
-while the stack is dropped from the log.
+- ✅ **Internal error messages reach clients.** *(0.3.0 — fixed)*
+A driver error such as `ER_BAD_FIELD_ERROR: Unknown column 'x'` used to be returned verbatim with
+a 500. Non-`BaseHttpError` throws now respond with a generic `Internal Server Error` message, and
+the original message + stack are written to the request log instead.
 - **Unbounded request body.** *(0.3.0 size cap; 0.3.2 `error`/`aborted`)*
 No size cap, and no `error`/`aborted` handler on `req`, so a client that disconnects mid-upload
 leaves the body promise pending forever.
