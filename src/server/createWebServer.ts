@@ -7,10 +7,14 @@ import { join, resolve, sep } from 'path';
 import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
 import type { IContext } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
+import { ContentTooLargeError } from '../errors/HttpErrors';
 import { extractUserFromRequest, resolveJwtOptions } from '../utils/auth';
 import type { JwtOptions } from '../types/jwt';
 
 // Controllers are now passed directly; basePath is derived from @Controller decorator on class
+
+/** Default cap on request body size when `maxBodySize` is not configured (1 MiB). */
+const DEFAULT_MAX_BODY_SIZE = 1024 * 1024;
 
 export interface WebServerOptions {
   port?: number;
@@ -29,6 +33,13 @@ export interface WebServerOptions {
    * Omit or pass `{}` to use defaults (HS256, `JWT_SECRET` env var, `authToken` cookie).
    */
   jwt?: JwtOptions | false;
+  /**
+   * Maximum accepted request body size, in bytes. Requests whose declared
+   * `Content-Length` exceeds this — or whose actual body exceeds it while
+   * streaming — are rejected with `413 Content Too Large` before a handler
+   * runs. Defaults to 1 MiB.
+   */
+  maxBodySize?: number;
 }
 
 interface MatchedRoute {
@@ -251,6 +262,7 @@ export function createWebServer(
 ) {
   const { staticRoutes, dynamicRoutes } = buildRouteTable(controllers);
   const jwtOpts = options.jwt !== false ? resolveJwtOptions(options.jwt ?? {}) : false;
+  const maxBodySize = options.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
     const traceId = generateTraceId();
@@ -260,9 +272,44 @@ export function createWebServer(
       const { pathname = '/', query } = parseUrl(req.url || '/', true);
       const path = normalizePath(pathname ?? '/');
 
+      // A body over the cap short-circuits to a 413 below. The socket is never destroyed
+      // mid-stream — killing it here would take the response down with it — instead the
+      // oversized bytes are simply never buffered, and the connection is closed once the
+      // 413 has actually been flushed to the client (see `Connection: close` below).
+      let bodyTooLarge = false;
+
+      const contentLengthHeader = req.headers['content-length'];
+      if (contentLengthHeader) {
+        const declaredLength = parseInt(contentLengthHeader, 10);
+        if (!Number.isNaN(declaredLength) && declaredLength > maxBodySize) {
+          bodyTooLarge = true;
+        }
+      }
+
       const chunks: Buffer[] = [];
-      req.on('data', (c) => chunks.push(c));
-      await new Promise<void>((resolve) => req.on('end', () => resolve()));
+      let receivedBytes = 0;
+      if (!bodyTooLarge) {
+        await new Promise<void>((resolveBody) => {
+          req.on('data', (c: Buffer) => {
+            if (bodyTooLarge) return;
+            receivedBytes += c.length;
+            if (receivedBytes > maxBodySize) {
+              bodyTooLarge = true;
+              chunks.length = 0;
+              resolveBody();
+              return;
+            }
+            chunks.push(c);
+          });
+          req.on('end', () => resolveBody());
+        });
+      }
+
+      if (bodyTooLarge) {
+        res.setHeader('Connection', 'close');
+        throw new ContentTooLargeError(`Request body exceeds the maximum allowed size of ${maxBodySize} bytes`);
+      }
+
       const rawBody = Buffer.concat(chunks).toString('utf8');
       let body: any = undefined;
       if (rawBody) {

@@ -460,8 +460,22 @@ const server = createWebServer({
   renderer: myTemplateRenderer,
   staticDir: './assets', // Override webDir for static files
   indexFiles: ['index.html', 'home.html'],
-  errorTemplate: 'error.html'
+  errorTemplate: 'error.html',
+  maxBodySize: 5 * 1024 * 1024 // 5 MiB — defaults to 1 MiB
 });
+```
+
+### Request body size limit
+
+Every request body is capped at `maxBodySize` bytes (**1 MiB by default**). A request whose
+declared `Content-Length` already exceeds the cap is rejected without reading a single byte of
+the body; a request that lies about its `Content-Length` (or has none, e.g. chunked encoding) is
+cut off as soon as the buffered bytes cross the limit. Either way the handler never runs — the
+router throws `ContentTooLargeError` (`413`) itself, and the connection is closed afterward since
+the remainder of the oversized body was never consumed:
+
+```ts
+createWebServer({ controllers }, { maxBodySize: 2 * 1024 * 1024 }); // 2 MiB
 ```
 
 ## Authorship & contribution

@@ -185,6 +185,65 @@ describe('createWebServer functional', () => {
   });
 });
 
+describe('body size limit', () => {
+  let server: any;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const web = createWebServer({ controllers: [new ApiController()] }, {
+      port: 0,
+      maxBodySize: 16, // tiny cap so tests don't need to send megabytes
+    });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it('accepts a body within the configured limit', async () => {
+    const res = await request('POST', `${baseUrl}/api/echo`, { a: 1 });
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ a: 1 });
+  });
+
+  it('rejects a body over the configured limit with 413, based on Content-Length', async () => {
+    const res = await request('POST', `${baseUrl}/api/echo`, { message: 'this body is definitely longer than sixteen bytes' });
+    expect(res.status).toBe(413);
+    expect(res.json?.error).toContain('exceeds the maximum allowed size');
+  });
+
+  it('rejects a chunked body over the configured limit even without Content-Length', async () => {
+    const res = await new Promise<{ status: number; json: any }>((resolve, reject) => {
+      const u = new URL(`${baseUrl}/api/echo`);
+      const req = http.request({
+        method: 'POST',
+        hostname: u.hostname,
+        port: Number(u.port),
+        path: u.pathname,
+        headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({ status: res.statusCode || 0, json: text ? JSON.parse(text) : undefined });
+        });
+      });
+      req.on('error', reject);
+      req.write('{"message":"');
+      req.write('this body is definitely longer than sixteen bytes"}');
+      req.end();
+    });
+    expect(res.status).toBe(413);
+    expect(res.json?.error).toContain('exceeds the maximum allowed size');
+  });
+});
+
 describe('error mapping', () => {
   let server: any;
   let baseUrl: string;

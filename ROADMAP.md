@@ -28,7 +28,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                     |
 | ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                          |
 | ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged      |
-| Body size limit                    | 0.3.0   | S    | **Security.** Body is buffered unbounded; cap it and return `413`                                             |
+| ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs    |
 | Decorator metadata isolation       | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | URL decoding                       | 0.3.0   | S    | Path params and static paths are never decoded (`%40`, `%20` reach handlers/`fs` encoded)                     |
 | `405` / `HEAD` / `OPTIONS`         | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
@@ -70,9 +70,11 @@ The per-request log writes `req.headers` wholesale, which includes `authorizatio
 A driver error such as `ER_BAD_FIELD_ERROR: Unknown column 'x'` used to be returned verbatim with
 a 500. Non-`BaseHttpError` throws now respond with a generic `Internal Server Error` message, and
 the original message + stack are written to the request log instead.
-- **Unbounded request body.** *(0.3.0 size cap; 0.3.2 `error`/`aborted`)*
-No size cap, and no `error`/`aborted` handler on `req`, so a client that disconnects mid-upload
-leaves the body promise pending forever.
+- ✅ **Unbounded request body.** *(0.3.0 size cap — fixed; 0.3.2 `error`/`aborted`)*
+A `maxBodySize` option (default 1 MiB) now caps request bodies; over-limit requests are rejected
+with `413` before a handler runs, either from `Content-Length` alone or once the streamed bytes
+cross the limit. Still no `error`/`aborted` handler on `req`, so a client that disconnects
+mid-upload (within the size cap) leaves the body promise pending forever — tracked for 0.3.2.
 - **Dotfiles are served** from the static directory. *(0.3.3)*
 - No `requestTimeout` / `headersTimeout` configuration (slowloris exposure). *(0.3.2)*
 
