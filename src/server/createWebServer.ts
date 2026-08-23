@@ -2,12 +2,12 @@ import * as http from 'http';
 import * as https from 'https';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { parse as parseUrl } from 'url';
-import { createHmac, timingSafeEqual } from 'crypto';
 import { createReadStream, statSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import { RouteDefinition, HttpMethod } from '../decorators/RouteDecorators';
-import type { IContext, AuthenticatedUser } from '../types/IContext';
+import type { IContext } from '../types/IContext';
 import { BaseHttpError } from '../errors/BaseHttpError';
+import { extractUserFromAuthorizationHeader } from "../utils/auth";
 
 // Controllers are now passed directly; basePath is derived from @Controller decorator on class
 
@@ -134,20 +134,6 @@ function compilePathToRegex(path: string) {
   return { regex: new RegExp(`^${pattern}$`), keys };
 }
 
-function base64UrlDecode(input: string): string {
-  const base64 = input.replace(/-/g, '+').replace(/_/g, '/');
-  const padLength = (4 - (base64.length % 4)) % 4;
-  const padded = base64 + '='.repeat(padLength);
-  return Buffer.from(padded, 'base64').toString('utf8');
-}
-
-function base64UrlToBuffer(input: string): Buffer {
-  const base64 = input.replace(/-/g, '+').replace(/_/g, '/');
-  const padLength = (4 - (base64.length % 4)) % 4;
-  const padded = base64 + '='.repeat(padLength);
-  return Buffer.from(padded, 'base64');
-}
-
 function isPathInside(parent: string, child: string): boolean {
   const parentResolved = resolve(parent);
   const childResolved = resolve(child);
@@ -238,74 +224,7 @@ function getContentType(ext?: string): string {
   return types[ext || ''] || 'application/octet-stream';
 }
 
-function parseCookies(cookieHeader?: string | string[]): Record<string, string> {
-  const cookies: Record<string, string> = {};
-  const header = Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader;
-  if (!header || typeof header !== 'string') return cookies;
-  
-  header.split(';').forEach(cookie => {
-    const [name, ...rest] = cookie.split('=');
-    if (name && rest.length > 0) {
-      cookies[name.trim()] = rest.join('=').trim();
-    }
-  });
-  
-  return cookies;
-}
 
-function extractUserFromAuthorizationHeader(headers: Record<string, string | string[]>): AuthenticatedUser | undefined {
-  try {
-    let token: string | undefined;
-    
-    // First, try to get token from Authorization header
-    const raw = headers['authorization'];
-    const header = Array.isArray(raw) ? raw[0] : raw;
-    if (header && typeof header === 'string' && header.startsWith('Bearer ')) {
-      token = header.slice(7).trim();
-    }
-    
-    // If no token in Authorization header, check cookies
-    if (!token) {
-      const cookies = parseCookies(headers['cookie']);
-      token = cookies['authToken'];
-    }
-    
-    // If still no token, return undefined
-    if (!token) return undefined;
-    
-    const parts = token.split('.');
-    if (parts.length !== 3) return undefined;
-
-    const [headerB64, payloadB64, signatureB64] = parts;
-
-    // Verify signature using HS256 and JWT_SECRET
-    const secret = process.env.JWT_SECRET;
-    if (!secret) return undefined;
-
-    const headerJson = base64UrlDecode(headerB64);
-    const headerObj = JSON.parse(headerJson);
-    if (headerObj.alg !== 'HS256' || headerObj.typ !== 'JWT') return undefined;
-
-    const data = `${headerB64}.${payloadB64}`;
-    const expected = createHmac('sha256', secret).update(data).digest();
-    const provided = base64UrlToBuffer(signatureB64);
-    if (provided.length !== expected.length) return undefined;
-    if (!timingSafeEqual(expected, provided)) return undefined;
-
-    const payloadJson = base64UrlDecode(payloadB64);
-    const payload = JSON.parse(payloadJson);
-
-    const user: AuthenticatedUser = {
-      id: payload.id ?? payload.sub,
-      role: payload.role ?? 'user',
-      email: payload.email,
-      ...payload
-    };
-    return user;
-  } catch {
-    return undefined;
-  }
-}
 
 function generateTraceId(): string {
   const bytes = new Uint8Array(8);
