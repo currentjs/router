@@ -32,7 +32,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
 | ✅ URL decoding                     | 0.3.0   | S    | Request path is decoded once (`decodeURIComponent`) before routing/static lookup; malformed encoding → `400`  |
 | ✅ `405` / `HEAD` / `OPTIONS`       | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
-| Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
+| ✅ Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
 | ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
 | Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
 | Request lifecycle robustness       | 0.3.2   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                    |

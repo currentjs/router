@@ -485,7 +485,8 @@ interface IContext {
     path: string;                             // Normalized path
     method: string;                           // HTTP method
     parameters: Record<string, string | number>; // Path params + query params
-    body: any;                                // Parsed JSON or raw string
+    body: any;                                // Parsed body — type depends on Content-Type (see below)
+    rawBody: Buffer;                          // Raw body bytes, exactly as received
     headers: Record<string, string | string[]>; // Request headers
     user?: AuthenticatedUser;                 // Parsed JWT user (if authenticated)
   };
@@ -513,9 +514,48 @@ const server = createWebServer({
   staticDir: './assets', // Override webDir for static files
   indexFiles: ['index.html', 'home.html'],
   errorTemplate: 'error.html',
-  maxBodySize: 5 * 1024 * 1024 // 5 MiB — defaults to 1 MiB
+  maxBodySize: 5 * 1024 * 1024, // 5 MiB — defaults to 1 MiB
+  bodyParsers: { /* see below */ },
 });
 ```
+
+### Request body parsing
+
+The router dispatches on the `Content-Type` header to decide how to turn the raw bytes into `ctx.request.body`:
+
+| Content-Type | `ctx.request.body` |
+|---|---|
+| `application/json` (or any `+json` subtype, e.g. `application/ld+json`) | Parsed JSON value. A malformed body throws `BadRequestError` (400). A UTF-8 BOM is stripped automatically. |
+| `application/x-www-form-urlencoded` | Plain key→value object. Repeated keys become arrays. |
+| `text/*` (e.g. `text/plain`, `text/csv`) | Decoded string. Charset from the `Content-Type` parameter, defaulting to UTF-8. |
+| `multipart/form-data` | Throws `UnsupportedMediaTypeError` (415). Full multipart/file upload support is planned for a later release. |
+| Any other type, or no `Content-Type` | Raw `Buffer`. |
+| Empty body | `undefined`, regardless of `Content-Type`. |
+
+`ctx.request.rawBody` always holds the exact bytes received (empty `Buffer` when there is no body), so you can verify webhook signatures or inspect the payload independently of how it was parsed.
+
+Parsing happens **after** route matching: a malformed body sent to an unregistered path returns `404`/`405`, not `400`. On `@Render` routes, a parse error renders `errorTemplate` as HTML rather than a bare JSON error.
+
+#### Customising body parsers
+
+```ts
+import type { BodyParser } from '@currentjs/router';
+
+createWebServer({ controllers }, {
+  // Add a parser for a new media type, while keeping all defaults:
+  bodyParsers: {
+    'application/xml': (raw, media) => myXmlParser(raw.toString('utf8')),
+  },
+
+  // Remove the built-in JSON parser (body arrives as a raw Buffer):
+  // bodyParsers: { 'application/json': null },
+
+  // Disable all parsing — ctx.request.body is always a raw Buffer:
+  // bodyParsers: false,
+});
+```
+
+Keys may be exact media types (`"application/json"`), structured-syntax suffixes (`"+json"` matches any `*+json` subtype), or wildcards (`"text/*"`, `"*/*"`). A `null` value removes a built-in default.
 
 ### Request body size limit
 

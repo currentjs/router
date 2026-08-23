@@ -10,6 +10,8 @@ import { BaseHttpError } from '../errors/BaseHttpError';
 import { BadRequestError, ContentTooLargeError } from '../errors/HttpErrors';
 import { extractUserFromRequest, resolveJwtOptions } from '../utils/auth';
 import type { JwtOptions } from '../types/jwt';
+import { resolveBodyParsers, parseRequestBody } from '../utils/bodyParsing';
+import type { BodyParser } from '../utils/bodyParsing';
 
 // Controllers are now passed directly; basePath is derived from @Controller decorator on class
 
@@ -40,6 +42,18 @@ export interface WebServerOptions {
    * runs. Defaults to 1 MiB.
    */
   maxBodySize?: number;
+  /**
+   * Request body parsing behaviour.
+   * - Omit or pass `{}` to use the built-in defaults: strict JSON (`400` on
+   *   malformed), urlencoded → object, `text/*` → string, `multipart/form-data`
+   *   → `415`, anything else (or no `Content-Type`) → raw `Buffer`.
+   * - `false` — disable parsing entirely; `ctx.request.body` is always the raw
+   *   `Buffer` (empty `Buffer` when there is no body).
+   * - Record — per-type overrides merged over the defaults. A `null` value
+   *   removes that default entry. Keys may be exact types (`"application/json"`),
+   *   structured-syntax suffixes (`"+json"`), or wildcards (`"text/*"`, `"*\/*"`).
+   */
+  bodyParsers?: false | Record<string, BodyParser | null>;
 }
 
 interface MatchedRoute {
@@ -357,6 +371,7 @@ export function createWebServer(
   const { staticRoutes, dynamicRoutes, staticPathMethods } = buildRouteTable(controllers);
   const jwtOpts = options.jwt !== false ? resolveJwtOptions(options.jwt ?? {}) : false;
   const maxBodySize = options.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
+  const resolvedBodyParsers = resolveBodyParsers(options.bodyParsers);
 
   const requestListener = async (req: IncomingMessage, res: ServerResponse) => {
     const traceId = generateTraceId();
@@ -413,18 +428,10 @@ export function createWebServer(
         throw new ContentTooLargeError(`Request body exceeds the maximum allowed size of ${maxBodySize} bytes`);
       }
 
-      const rawBody = Buffer.concat(chunks).toString('utf8');
-      let body: any = undefined;
-      if (rawBody) {
-        try {
-          body = JSON.parse(rawBody);
-        } catch {
-          body = rawBody;
-        }
-      }
+      const rawBodyBuf = Buffer.concat(chunks);
 
       const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-      const bodySize = rawBody ? Buffer.byteLength(rawBody, 'utf8') : 0;
+      const bodySize = rawBodyBuf.length;
       console.log(JSON.stringify({
         timestamp: generateTimestamp(),
         traceId,
@@ -529,7 +536,8 @@ export function createWebServer(
         request: {
           url: req.url || '/',
           parameters: { ...(query as Record<string, any>), ...matched.params },
-          body,
+          body: undefined,
+          rawBody: rawBodyBuf,
           headers: headers,
           method,
           path,
@@ -555,6 +563,12 @@ export function createWebServer(
         if (jwtOpts !== false) {
           context.request.user = extractUserFromRequest(headers, jwtOpts);
         }
+
+        // Parse the body here, after route matching and JWT, so:
+        //   • A bad body on an unregistered path → 404/405 (not 400).
+        //   • A bad body on a @Render route → errorTemplate HTML (not bare JSON).
+        //   • A 401 always wins over a 400 when both a bad token and a bad body arrive.
+        context.request.body = parseRequestBody(rawBodyBuf, headers, resolvedBodyParsers) as any;
 
         const result = await handler(context);
 
