@@ -25,7 +25,7 @@ Two structural gaps still shape most of the work below:
 | ✅ Directory index as `/`           | 0.2.2   | S    | `index.html` (and `indexFiles`) served for `/` and directory paths                                            |
 | ✅ README catch-up                  | 0.2.2   | S    | Error classes, matching rules, and index-file resolution documented                                           |
 | ✅ Complete the error API           | 0.3.0   | S    | `BaseHttpError` exported; `412`, `417`, `422`, `428`, `431`, `502`, `504`, `505` added                        |
-| Remaining README gaps              | 0.3.0   | S    | Still omitted: the `authToken` cookie fallback and the `X-Layout` header                                      |
+| ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                     |
 | **JWT expiry validation**          | 0.3.0   | S    | **Security.** `exp`/`nbf` are never checked — expired tokens are accepted permanently                         |
 | Stop leaking internals             | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws return `error.message` verbatim with 500; log the stack instead      |
 | Body size limit                    | 0.3.0   | S    | **Security.** Body is buffered unbounded; cap it and return `413`                                             |

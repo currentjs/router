@@ -35,7 +35,7 @@ npm i @currentjs/router
 
 - **Decorators**: `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Render`, `@Controller`
 - **Dynamic routing**: Path parameters like `/users/:id`
-- **JWT Authentication**: Built-in JWT parsing and user context (HS256)
+- **JWT Authentication**: Built-in JWT parsing and user context (HS256), from the `Authorization` header or the `authToken` cookie
 - **Static file serving**: With path traversal protection
 - **Template rendering**: SSR support with layouts and partial content for SPAs
 - **HTTPS support** in case of not having load balancer in front of the app.
@@ -157,7 +157,7 @@ Just include a JWT token in the Authorization header and we'll parse it for you:
 async getProfile(ctx: IContext) {
   const user = ctx.request.user; // Parsed from JWT
   if (!user) {
-    throw new Error('Authentication required');
+    throw new UnauthorizedError('Authentication required');
   }
   return { 
     id: user.id, 
@@ -171,6 +171,24 @@ async getProfile(ctx: IContext) {
 - Algorithm: HS256
 - Secret: Set `JWT_SECRET` environment variable
 - Standard claims: `id` (or `sub`), `role`, `email`
+
+### Where the Token Comes From
+
+The router looks for the token in two places, in this order:
+
+1. The `Authorization` header, which must use the `Bearer ` scheme (the scheme name is matched case-insensitively).
+2. The **`authToken` cookie**, used only when the header is absent or does not carry a `Bearer ` token.
+
+```http
+Authorization: Bearer your.jwt.token
+Cookie: authToken=your.jwt.token
+```
+
+The cookie fallback exists because of server-rendered pages: when a browser follows a link or submits a normal form, it cannot attach an `Authorization` header, so `@Render` routes would have no way of knowing who the user is. Generated apps therefore mirror the token into an `authToken` cookie at login and keep sending the header for API calls.
+
+The router only ever *reads* the cookie — it never sets or clears it, and it has no opinion on the cookie's `Path`, `Max-Age`, `HttpOnly`, or `SameSite` attributes. Writing it is your application's job (and until the response API lands in 0.4.0, that has to happen client-side).
+
+Whichever source it came from, the token goes through the same checks: the header must declare `HS256`, and the signature must verify against `JWT_SECRET`. Failures are never fatal — a missing, malformed, or badly signed token simply leaves `ctx.request.user` as `undefined`, exactly like an anonymous request. Handlers that require a user must check for it themselves and throw `UnauthorizedError`.
 
 ## Error Handling (HTTP Errors Made Easy)
 
@@ -277,7 +295,36 @@ const server = createWebServer({
 
 **Pro Tip**: While you *can* use any template engine, this router is optimized for `@currentjs/templating` which provides powerful features like component composition, conditional rendering, and seamless SPA support.
 
-**SPA Support**: The router detects `X-Partial-Content: true` headers and skips the layout for seamless SPA navigation.
+### SPA Support: `X-Partial-Content` and `X-Layout`
+
+Rendered routes take part in a two-header handshake that lets a client swap page content without a full reload:
+
+| Header | Direction | Meaning |
+|---|---|---|
+| `X-Partial-Content: true` | request | Render the template *without* its layout, returning just the page fragment |
+| `X-Layout` | response | The layout the route would have used, as named in its `@Render` decorator |
+
+`X-Layout` is set on every successfully rendered response — including partial ones, where it names the layout that was *skipped* rather than the one that was applied. Routes declared with `@Render('page.html')` and no layout report an empty value.
+
+That combination is what makes partial navigation safe. A client holding a page rendered with `layout.html` can only splice a fragment into it if the destination uses the same layout; otherwise the surrounding chrome would be wrong. So it requests the fragment, compares `X-Layout` against the layout it is currently displaying, and falls back to a full page load when they differ:
+
+```js
+const response = await fetch(url, { headers: { 'X-Partial-Content': 'true' } });
+
+const target = response.headers.get('X-Layout') || '';
+const current = document.querySelector('meta[name="app-layout"]')?.content || '';
+
+if (target !== current) {
+  window.location.href = url; // different shell — let the browser do a full load
+} else {
+  document.querySelector('#main').innerHTML = await response.text();
+  window.history.pushState({}, '', url);
+}
+```
+
+This is exactly what the `navigateToPage` helper in generated apps does; the layout name is published to the client through an `<meta name="app-layout">` tag in the layout template itself.
+
+> ⚠️ `X-Layout` is currently sent on *all* rendered responses, which exposes internal template names to any client. Making it opt-in is planned for 0.4.0 — see `ROADMAP.md`.
 
 ## Static File Serving (Because Someone Has to Serve Those Cat GIFs)
 
