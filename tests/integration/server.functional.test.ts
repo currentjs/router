@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from '../lib.js';
 import { Controller, Get, Post, Render } from '../../src/decorators/RouteDecorators.js';
 import { createWebServer } from '../../src/server/createWebServer.js';
+import { BaseHttpError } from '../../src/errors/BaseHttpError.js';
+import { GatewayTimeoutError, ServiceNotAvailableError, UnprocessableContentError } from '../../src/errors/HttpErrors.js';
 import * as http from 'http';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -10,7 +12,9 @@ function request(method: string, url: string, body?: any, headers: Record<string
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = typeof body === 'string' ? body : body ? JSON.stringify(body) : undefined;
-    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search, headers: { 'Content-Type': 'application/json', ...(headers || {}), ...(data ? { 'Content-Length': Buffer.byteLength(data).toString() } : {}) } }, (res) => {
+    // Connection: close keeps server.close() in the teardown hook from waiting
+    // out the keep-alive timeout on an idle socket.
+    const req = http.request({ method, hostname: u.hostname, port: Number(u.port), path: u.pathname + u.search, headers: { Connection: 'close', 'Content-Type': 'application/json', ...(headers || {}), ...(data ? { 'Content-Length': Buffer.byteLength(data).toString() } : {}) } }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
@@ -85,6 +89,40 @@ class CatchAllController {
   }
 }
 
+class PaymentRequiredByCustomClassError extends BaseHttpError {
+  constructor(msg: string) {
+    super(402, msg);
+  }
+}
+
+@Controller('/errors')
+class ErrorController {
+  @Get('/unprocessable')
+  async unprocessable() {
+    throw new UnprocessableContentError('Title is required');
+  }
+
+  @Get('/unavailable')
+  async unavailable() {
+    throw new ServiceNotAvailableError('Maintenance');
+  }
+
+  @Get('/gateway-timeout')
+  async gatewayTimeout() {
+    throw new GatewayTimeoutError('Upstream did not answer');
+  }
+
+  @Get('/custom')
+  async custom() {
+    throw new PaymentRequiredByCustomClassError('Subscription expired');
+  }
+
+  @Get('/plain')
+  async plain() {
+    throw new Error('something went wrong');
+  }
+}
+
 describe('createWebServer functional', () => {
   let server: any;
   let baseUrl: string;
@@ -146,6 +184,137 @@ describe('createWebServer functional', () => {
     const res = await request('GET', `${baseUrl}/nope`);
     expect(res.status).toBe(404);
     expect(res.json).toEqual({ error: 'Not Found' });
+  });
+
+  it('URL-decodes path params before they reach the handler', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/John%20Doe`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ message: 'Hello John Doe' });
+  });
+
+  it('URL-decodes special characters (%40) in path params', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/john%40doe.com`);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ message: 'Hello john@doe.com' });
+  });
+
+  it('URL-decodes static file paths (space in filename)', async () => {
+    writeFileSync(join(tmpDir, 'my file.html'), '<html><body>Spaced</body></html>', 'utf8');
+    const res = await request('GET', `${baseUrl}/my%20file.html`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Spaced');
+  });
+
+  it('returns 400 for malformed percent-encoding in the request path', async () => {
+    const res = await request('GET', `${baseUrl}/api/hello/broken%`);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('body size limit', () => {
+  let server: any;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const web = createWebServer({ controllers: [new ApiController()] }, {
+      port: 0,
+      maxBodySize: 16, // tiny cap so tests don't need to send megabytes
+    });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it('accepts a body within the configured limit', async () => {
+    const res = await request('POST', `${baseUrl}/api/echo`, { a: 1 });
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ a: 1 });
+  });
+
+  it('rejects a body over the configured limit with 413, based on Content-Length', async () => {
+    const res = await request('POST', `${baseUrl}/api/echo`, { message: 'this body is definitely longer than sixteen bytes' });
+    expect(res.status).toBe(413);
+    expect(res.json?.error).toContain('exceeds the maximum allowed size');
+  });
+
+  it('rejects a chunked body over the configured limit even without Content-Length', async () => {
+    const res = await new Promise<{ status: number; json: any }>((resolve, reject) => {
+      const u = new URL(`${baseUrl}/api/echo`);
+      const req = http.request({
+        method: 'POST',
+        hostname: u.hostname,
+        port: Number(u.port),
+        path: u.pathname,
+        headers: { Connection: 'close', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({ status: res.statusCode || 0, json: text ? JSON.parse(text) : undefined });
+        });
+      });
+      req.on('error', reject);
+      req.write('{"message":"');
+      req.write('this body is definitely longer than sixteen bytes"}');
+      req.end();
+    });
+    expect(res.status).toBe(413);
+    expect(res.json?.error).toContain('exceeds the maximum allowed size');
+  });
+});
+
+describe('error mapping', () => {
+  let server: any;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const web = createWebServer({ controllers: [new ErrorController()] });
+    const s = await web.listen(0, '127.0.0.1');
+    server = web;
+    const address = s.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it('maps UnprocessableContentError to 422', async () => {
+    const res = await request('GET', `${baseUrl}/errors/unprocessable`);
+    expect(res.status).toBe(422);
+    expect(res.json).toEqual({ error: 'Title is required' });
+  });
+
+  it('maps ServiceNotAvailableError to 503', async () => {
+    const res = await request('GET', `${baseUrl}/errors/unavailable`);
+    expect(res.status).toBe(503);
+    expect(res.json).toEqual({ error: 'Maintenance' });
+  });
+
+  it('maps GatewayTimeoutError to 504', async () => {
+    const res = await request('GET', `${baseUrl}/errors/gateway-timeout`);
+    expect(res.status).toBe(504);
+    expect(res.json).toEqual({ error: 'Upstream did not answer' });
+  });
+
+  it('maps a consumer-defined BaseHttpError subclass to its own status', async () => {
+    const res = await request('GET', `${baseUrl}/errors/custom`);
+    expect(res.status).toBe(402);
+    expect(res.json).toEqual({ error: 'Subscription expired' });
+  });
+
+  it('maps a non-HTTP error to 500 without leaking the internal error message', async () => {
+    const res = await request('GET', `${baseUrl}/errors/plain`);
+    expect(res.status).toBe(500);
+    expect(res.json).toEqual({ error: 'Internal Server Error' });
   });
 });
 

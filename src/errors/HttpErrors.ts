@@ -63,6 +63,12 @@ export class GoneError extends BaseHttpError {
   }
 }
 
+export class PreconditionFailedError extends BaseHttpError {
+  constructor(msg: string) {
+    super(412, msg);
+  }
+}
+
 export class ContentTooLargeError extends BaseHttpError {
   constructor(msg: string) {
     super(413, msg);
@@ -81,6 +87,18 @@ export class UnsupportedMediaTypeError extends BaseHttpError {
   }
 }
 
+export class ExpectationFailedError extends BaseHttpError {
+  constructor(msg: string) {
+    super(417, msg);
+  }
+}
+
+export class UnprocessableContentError extends BaseHttpError {
+  constructor(msg: string) {
+    super(422, msg);
+  }
+}
+
 export class TooEarlyError extends BaseHttpError {
   constructor(msg: string) {
     super(425, msg);
@@ -93,9 +111,21 @@ export class UpgradeRequiredError extends BaseHttpError {
   }
 }
 
+export class PreconditionRequiredError extends BaseHttpError {
+  constructor(msg: string) {
+    super(428, msg);
+  }
+}
+
 export class TooManyRequestsError extends BaseHttpError {
   constructor(msg: string) {
     super(429, msg);
+  }
+}
+
+export class RequestHeaderFieldsTooLargeError extends BaseHttpError {
+  constructor(msg: string) {
+    super(431, msg);
   }
 }
 
@@ -117,8 +147,26 @@ export class NotImplementedError extends BaseHttpError {
   }
 }
 
+export class BadGatewayError extends BaseHttpError {
+  constructor(msg: string) {
+    super(502, msg);
+  }
+}
+
 export class ServiceNotAvailableError extends BaseHttpError {
   constructor(msg: string) {
     super(503, msg);
+  }
+}
+
+export class GatewayTimeoutError extends BaseHttpError {
+  constructor(msg: string) {
+    super(504, msg);
+  }
+}
+
+export class HttpVersionNotSupportedError extends BaseHttpError {
+  constructor(msg: string) {
+    super(505, msg);
   }
 }

@@ -31,7 +31,9 @@
     "prepack": "npm run build",
     "test:build": "tsc -p tsconfig.test.json",
     "test": "npm run test:build && node --test dist-test/tests/unit/*.test.js",
-    "test:all": "npm run test:build && node --test dist-test/tests/unit/*.test.js dist-test/tests/integration/*.test.js"
+    "test:all": "npm run test:build && node --test dist-test/tests/unit/*.test.js dist-test/tests/integration/*.test.js",
+    "test:coverage": "npm run test:build && node --test --experimental-test-coverage dist-test/tests/unit/*.test.js dist-test/tests/integration/*.test.js",
+    "test:coverage:src": "npm run test:build && node --test --experimental-test-coverage --test-coverage-exclude=\"dist-test/tests/**\" dist-test/tests/unit/*.test.js dist-test/tests/integration/*.test.js"
   },
   "engines": {
     "node": ">=18"

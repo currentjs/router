@@ -24,3 +24,80 @@ jobs:
 
       - name: Run tests
         run: npm run test:all
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # --test-coverage-exclude needs Node >= 22.5; the test job keeps
+          # covering the supported minimum (18).
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Report coverage
+        id: coverage
+        run: |
+          npm run test:coverage:src | tee coverage-output.txt
+
+          summary_line=$(grep '^# all files' coverage-output.txt)
+          if [ -z "$summary_line" ]; then
+            echo "Could not find the 'all files' summary row in the coverage output" >&2
+            exit 1
+          fi
+
+          echo "lines=$(echo "$summary_line" | cut -d'|' -f2 | xargs)" >> "$GITHUB_OUTPUT"
+          echo "branches=$(echo "$summary_line" | cut -d'|' -f3 | xargs)" >> "$GITHUB_OUTPUT"
+          echo "funcs=$(echo "$summary_line" | cut -d'|' -f4 | xargs)" >> "$GITHUB_OUTPUT"
+
+      # GITHUB_TOKEN is read-only for pull_request events triggered from a
+      # fork, regardless of the `permissions` above — this step will fail on
+      # those PRs. That's a GitHub platform restriction, not a bug here.
+      - name: Comment coverage on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- router-coverage-report -->';
+            const outcome = '${{ steps.coverage.outcome }}';
+            const body = outcome === 'success'
+              ? [
+                  marker,
+                  '## Coverage report (`@currentjs/router`)',
+                  '',
+                  '| Lines | Branches | Functions |',
+                  '| --- | --- | --- |',
+                  `| ${{ steps.coverage.outputs.lines }}% | ${{ steps.coverage.outputs.branches }}% | ${{ steps.coverage.outputs.funcs }}% |`,
+                ].join('\n')
+              : `${marker}\n## Coverage report (\`@currentjs/router\`)\n\n⚠️ Coverage run failed — see the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

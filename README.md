@@ -35,7 +35,8 @@ npm i @currentjs/router
 
 - **Decorators**: `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Render`, `@Controller`
 - **Dynamic routing**: Path parameters like `/users/:id`
-- **JWT Authentication**: Built-in JWT parsing and user context (HS256)
+- **Automatic `HEAD`/`OPTIONS`**: Method mismatches get an `Allow` header instead of a bare `404`; `OPTIONS` preflights and `HEAD` requests need no extra code
+- **JWT Authentication**: Built-in JWT parsing and user context (HS256/HS384/HS512), `exp`/`nbf`/`iat` validated, from the `Authorization` header or the `authToken` cookie
 - **Static file serving**: With path traversal protection
 - **Template rendering**: SSR support with layouts and partial content for SPAs
 - **HTTPS support** in case of not having load balancer in front of the app.
@@ -96,6 +97,12 @@ class MyController {
 }
 ```
 
+### Inheritance
+
+Decorator metadata is **per-class** and is never inherited. Each controller class must declare its own `@Controller`, `@Get`/`@Post`/… and `@Render` decorators. A subclass that omits `@Controller` registers its routes without any prefix; a subclass with no method decorators registers no routes at all — even if the base class has some.
+
+Shared logic should live in plain (undecorated) helper methods or a shared service, not in a decorated base class that is also registered as a controller.
+
 ### Render Decorator
 ```ts
 @Controller('/')
@@ -124,6 +131,11 @@ async getUserPost(ctx: IContext) {
 }
 ```
 
+The request path is URL-decoded once, before routing and static-file lookup. `GET /users/john%40doe.com`
+delivers `userId === 'john@doe.com'`, and a static file with a space or unicode in its name (e.g.
+`my file.html`) is reachable via its encoded URL. A malformed percent-escape in the path (e.g. a bare
+trailing `%`) is rejected with `400 Bad Request` before any route is matched.
+
 ## Route Matching Order
 
 Declaration order does not matter. The router always resolves routes by specificity:
@@ -147,30 +159,142 @@ class ItemsController {
 }
 ```
 
-## Authentication (JWT Magic)
+## Method Handling: `HEAD` / `OPTIONS`
 
-Just include a JWT token in the Authorization header and we'll parse it for you:
+The router is aware of every method registered for a given path, not just the one that matched:
+
+| Situation | Result |
+|---|---|
+| Path is registered, but not for the request's method | `405 Method Not Allowed` with an `Allow` header listing every method the path *does* support |
+| `OPTIONS` request to a registered path | `204 No Content` with an `Allow` header — no controller code runs |
+| `HEAD` request to a path with a `GET` route (or a static file) | The matching `GET` handler (or file) runs as usual, but the response body is omitted — headers, status code, and `Content-Length` are identical to what `GET` would have returned |
+| Path matches no route/static file for *any* method | `404 Not Found`, same as before |
+
+```ts
+@Controller('/api/posts')
+class PostsController {
+  @Get('/')
+  async list() { /* ... */ }
+
+  @Post('/')
+  async create() { /* ... */ }
+}
+```
+
+With the controller above:
+
+```http
+DELETE /api/posts/
+→ 405 Method Not Allowed
+  Allow: GET, HEAD, OPTIONS, POST
+
+OPTIONS /api/posts/
+→ 204 No Content
+  Allow: GET, HEAD, OPTIONS, POST
+
+HEAD /api/posts/
+→ 200 OK (same headers `GET /api/posts/` would send, empty body)
+```
+
+There is no `@Head` or `@Options` decorator — both are derived automatically from the routes a
+controller already declares with `@Get`/`@Post`/etc., so there's nothing extra to configure.
+
+## Authentication (JWT)
+
+Include a JWT in the `Authorization` header and the router parses and verifies it for you:
 
 ```ts
 // Request header: Authorization: Bearer your.jwt.token
 @Get('/profile')
 async getProfile(ctx: IContext) {
-  const user = ctx.request.user; // Parsed from JWT
+  const user = ctx.request.user; // Parsed from JWT, or undefined if no token was sent
   if (!user) {
-    throw new Error('Authentication required');
+    throw new UnauthorizedError('Authentication required');
   }
-  return { 
-    id: user.id, 
-    email: user.email, 
-    role: user.role 
-  };
+  return { id: user.id, email: user.email, role: user.role };
 }
 ```
 
-**JWT Requirements:**
-- Algorithm: HS256
-- Secret: Set `JWT_SECRET` environment variable
-- Standard claims: `id` (or `sub`), `role`, `email`
+### Anonymous vs. rejected
+
+The router distinguishes two cases:
+
+| Situation | Result |
+|---|---|
+| No token present | `ctx.request.user` is `undefined`; request continues normally |
+| Token present but invalid/expired | `UnauthorizedError` (401) is thrown before the handler runs |
+
+This means public routes work without any change — they simply never receive a `user`. Routes that require authentication should check `ctx.request.user` and throw `UnauthorizedError` if it is absent.
+
+### Where the token comes from
+
+The router checks two places, in order:
+
+1. The `Authorization` header with the `Bearer` scheme (case-insensitive).
+2. The **`authToken` cookie**, only when the header carries no Bearer token.
+
+```http
+Authorization: Bearer your.jwt.token
+Cookie: authToken=your.jwt.token
+```
+
+The cookie fallback exists for server-rendered pages: a browser following a link or submitting a plain form cannot attach an `Authorization` header, so `@Render` routes would otherwise be unable to identify the user. Generated apps mirror the token into an `authToken` cookie at login and continue sending the header for API calls.
+
+The router only ever *reads* the cookie — it never sets or clears it.
+
+### JWT verification
+
+Every token goes through the same checks:
+
+- **Signature** — verified using HMAC with the configured secret.
+- **Algorithm** — must be listed in `algorithms` (default: `['HS256']`).
+- **`exp`** — if present, the token must not be expired (checked against the server clock).
+- **`nbf`** — if present, the token must already be valid.
+- **`iat`** — if present, must not be significantly in the future.
+- **`typ`** — if present, must be `'JWT'`; tokens that omit `typ` are accepted.
+
+Claims `id` (fallback: `sub`), `role` (default: `'user'`), and `email` are mapped onto `ctx.request.user`. All other payload fields are also available.
+
+### JWT options
+
+Pass a `jwt` object as part of `WebServerOptions` to configure verification:
+
+```ts
+import { createWebServer, type JwtOptions } from '@currentjs/router';
+
+const server = createWebServer(
+  { controllers },
+  {
+    jwt: {
+      secret: process.env.MY_JWT_SECRET,   // default: process.env.JWT_SECRET
+      cookieName: 'authToken',             // default: 'authToken'; false = disable cookie
+      algorithms: ['HS256'],               // default: ['HS256']; also 'HS384', 'HS512'
+      clockToleranceSec: 0,                // default: 0 — leeway for exp/nbf checks
+      requireExpiration: false,            // default: false — reject tokens with no exp
+    },
+  }
+);
+```
+
+Set `jwt: false` to disable token extraction entirely (all requests are anonymous):
+
+```ts
+createWebServer({ controllers }, { jwt: false });
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `secret` | `string \| Buffer` | `process.env.JWT_SECRET` | HMAC signing secret |
+| `cookieName` | `string \| false` | `'authToken'` | Cookie to check when header is absent; `false` disables the fallback |
+| `algorithms` | `JwtAlgorithm[]` | `['HS256']` | Allowed signing algorithms (`'HS256'`, `'HS384'`, `'HS512'`) |
+| `clockToleranceSec` | `number` | `0` | Seconds of leeway applied to `exp` (permissive) and `nbf` (permissive) |
+| `requireExpiration` | `boolean` | `false` | Reject tokens that do not include an `exp` claim |
+
+### Breaking-change note
+
+Prior to 0.3.0, a missing, malformed, or expired token was treated identically to no token: `ctx.request.user` was set to `undefined` and the request continued. From 0.3.0 onward, a *present-but-invalid* token throws `UnauthorizedError` before the handler runs.
+
+Generated apps (`@currentjs/gen`) store the token in an `authToken` cookie with `max-age=31536000`. If a user's token expires while the cookie is still present, every request — including public ones — will receive a 401 until the cookie is cleared. A planned follow-up (`web/app.js`) will clear the cookie on any 401 response automatically.
 
 ## Error Handling (HTTP Errors Made Easy)
 
@@ -208,18 +332,47 @@ The error's `message` is returned as `{ "error": "<message>" }` (JSON routes) or
 | `RequestTimeoutError` | 408 |
 | `ConflictError` | 409 |
 | `GoneError` | 410 |
+| `PreconditionFailedError` | 412 |
 | `ContentTooLargeError` | 413 |
 | `UriTooLongError` | 414 |
 | `UnsupportedMediaTypeError` | 415 |
+| `ExpectationFailedError` | 417 |
+| `UnprocessableContentError` | 422 |
 | `TooEarlyError` | 425 |
 | `UpgradeRequiredError` | 426 |
+| `PreconditionRequiredError` | 428 |
 | `TooManyRequestsError` | 429 |
+| `RequestHeaderFieldsTooLargeError` | 431 |
 | `UnavailableForLegalReasonsError` | 451 |
 | `InternalServerErrorError` | 500 |
 | `NotImplementedError` | 501 |
+| `BadGatewayError` | 502 |
 | `ServiceNotAvailableError` | 503 |
+| `GatewayTimeoutError` | 504 |
+| `HttpVersionNotSupportedError` | 505 |
 
-All of them take a single `msg: string` constructor argument and extend the abstract `BaseHttpError` class (which exposes `getHTTPCode()`), in case you want to build your own custom error types on top of it.
+All of them take a single `msg: string` constructor argument and extend the abstract `BaseHttpError` class, which is exported too. Extend it for any status without a built-in class, and use it to recognize router errors:
+
+```ts
+import { BaseHttpError } from '@currentjs/router';
+
+class ImATeapotError extends BaseHttpError {
+  constructor(msg: string) {
+    super(418, msg);
+  }
+}
+
+try {
+  await doSomething();
+} catch (e) {
+  if (e instanceof BaseHttpError) {
+    console.error(e.name, e.getHTTPCode(), e.message);
+  }
+  throw e;
+}
+```
+
+`error.name` is the concrete class name (`'NotFoundError'`, `'ImATeapotError'`), so it survives logging.
 
 ## Template Rendering (SSR)
 
@@ -248,7 +401,36 @@ const server = createWebServer({
 
 **Pro Tip**: While you *can* use any template engine, this router is optimized for `@currentjs/templating` which provides powerful features like component composition, conditional rendering, and seamless SPA support.
 
-**SPA Support**: The router detects `X-Partial-Content: true` headers and skips the layout for seamless SPA navigation.
+### SPA Support: `X-Partial-Content` and `X-Layout`
+
+Rendered routes take part in a two-header handshake that lets a client swap page content without a full reload:
+
+| Header | Direction | Meaning |
+|---|---|---|
+| `X-Partial-Content: true` | request | Render the template *without* its layout, returning just the page fragment |
+| `X-Layout` | response | The layout the route would have used, as named in its `@Render` decorator |
+
+`X-Layout` is set on every successfully rendered response — including partial ones, where it names the layout that was *skipped* rather than the one that was applied. Routes declared with `@Render('page.html')` and no layout report an empty value.
+
+That combination is what makes partial navigation safe. A client holding a page rendered with `layout.html` can only splice a fragment into it if the destination uses the same layout; otherwise the surrounding chrome would be wrong. So it requests the fragment, compares `X-Layout` against the layout it is currently displaying, and falls back to a full page load when they differ:
+
+```js
+const response = await fetch(url, { headers: { 'X-Partial-Content': 'true' } });
+
+const target = response.headers.get('X-Layout') || '';
+const current = document.querySelector('meta[name="app-layout"]')?.content || '';
+
+if (target !== current) {
+  window.location.href = url; // different shell — let the browser do a full load
+} else {
+  document.querySelector('#main').innerHTML = await response.text();
+  window.history.pushState({}, '', url);
+}
+```
+
+This is exactly what the `navigateToPage` helper in generated apps does; the layout name is published to the client through an `<meta name="app-layout">` tag in the layout template itself.
+
+> ⚠️ `X-Layout` is currently sent on *all* rendered responses, which exposes internal template names to any client. Making it opt-in is planned for 0.4.0 — see `ROADMAP.md`.
 
 ## Static File Serving (Because Someone Has to Serve Those Cat GIFs)
 
@@ -303,7 +485,8 @@ interface IContext {
     path: string;                             // Normalized path
     method: string;                           // HTTP method
     parameters: Record<string, string | number>; // Path params + query params
-    body: any;                                // Parsed JSON or raw string
+    body: any;                                // Parsed body — type depends on Content-Type (see below)
+    rawBody: Buffer;                          // Raw body bytes, exactly as received
     headers: Record<string, string | string[]>; // Request headers
     user?: AuthenticatedUser;                 // Parsed JWT user (if authenticated)
   };
@@ -330,8 +513,61 @@ const server = createWebServer({
   renderer: myTemplateRenderer,
   staticDir: './assets', // Override webDir for static files
   indexFiles: ['index.html', 'home.html'],
-  errorTemplate: 'error.html'
+  errorTemplate: 'error.html',
+  maxBodySize: 5 * 1024 * 1024, // 5 MiB — defaults to 1 MiB
+  bodyParsers: { /* see below */ },
 });
+```
+
+### Request body parsing
+
+The router dispatches on the `Content-Type` header to decide how to turn the raw bytes into `ctx.request.body`:
+
+| Content-Type | `ctx.request.body` |
+|---|---|
+| `application/json` (or any `+json` subtype, e.g. `application/ld+json`) | Parsed JSON value. A malformed body throws `BadRequestError` (400). A UTF-8 BOM is stripped automatically. |
+| `application/x-www-form-urlencoded` | Plain key→value object. Repeated keys become arrays. |
+| `text/*` (e.g. `text/plain`, `text/csv`) | Decoded string. Charset from the `Content-Type` parameter, defaulting to UTF-8. |
+| `multipart/form-data` | Throws `UnsupportedMediaTypeError` (415). Full multipart/file upload support is planned for a later release. |
+| Any other type, or no `Content-Type` | Raw `Buffer`. |
+| Empty body | `undefined`, regardless of `Content-Type`. |
+
+`ctx.request.rawBody` always holds the exact bytes received (empty `Buffer` when there is no body), so you can verify webhook signatures or inspect the payload independently of how it was parsed.
+
+Parsing happens **after** route matching: a malformed body sent to an unregistered path returns `404`/`405`, not `400`. On `@Render` routes, a parse error renders `errorTemplate` as HTML rather than a bare JSON error.
+
+#### Customising body parsers
+
+```ts
+import type { BodyParser } from '@currentjs/router';
+
+createWebServer({ controllers }, {
+  // Add a parser for a new media type, while keeping all defaults:
+  bodyParsers: {
+    'application/xml': (raw, media) => myXmlParser(raw.toString('utf8')),
+  },
+
+  // Remove the built-in JSON parser (body arrives as a raw Buffer):
+  // bodyParsers: { 'application/json': null },
+
+  // Disable all parsing — ctx.request.body is always a raw Buffer:
+  // bodyParsers: false,
+});
+```
+
+Keys may be exact media types (`"application/json"`), structured-syntax suffixes (`"+json"` matches any `*+json` subtype), or wildcards (`"text/*"`, `"*/*"`). A `null` value removes a built-in default.
+
+### Request body size limit
+
+Every request body is capped at `maxBodySize` bytes (**1 MiB by default**). A request whose
+declared `Content-Length` already exceeds the cap is rejected without reading a single byte of
+the body; a request that lies about its `Content-Length` (or has none, e.g. chunked encoding) is
+cut off as soon as the buffered bytes cross the limit. Either way the handler never runs — the
+router throws `ContentTooLargeError` (`413`) itself, and the connection is closed afterward since
+the remainder of the oversized body was never consumed:
+
+```ts
+createWebServer({ controllers }, { maxBodySize: 2 * 1024 * 1024 }); // 2 MiB
 ```
 
 ## Authorship & contribution
