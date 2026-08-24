@@ -453,7 +453,7 @@ const server = createWebServer({
 Both the directory route (`/pages`) and the explicit file path (`/pages/index.html`) serve the same file — no redirect is issued.
 
 **Security Features:**
-- Path traversal protection (no `../../../etc/passwd` nonsense)
+- Path traversal protection (requests cannot escape the static root)
 - Proper MIME type detection
 - Directory index file serving
 
