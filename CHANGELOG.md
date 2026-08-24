@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0] - 2026-08-24
+
+- extended list of Error classes
+- JWT: configurable & more secure
+- security fix (stop leaking internal error message)
+- request body size limit fix: decorator metadata isolation (hidden bug fixed)
+- URL decoding
+- HEAD/OPTIONS support
+- Content-type-aware body parsing
+- other internal changes
+
 ## [0.2.2] - 2026-08-07
 
 - bug Routes order must not be important (#1)
