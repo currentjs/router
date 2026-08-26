@@ -482,6 +482,7 @@ Every route handler receives a context object with everything you need:
 interface IContext {
   request: {
     url: string;                              // Original URL
+    domain: string;                           // Hostname from the `Host` header, port stripped
     path: string;                             // Normalized path
     method: string;                           // HTTP method
     parameters: Record<string, string | number>; // Path params + query params

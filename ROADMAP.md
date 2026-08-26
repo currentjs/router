@@ -14,42 +14,43 @@ Two structural gaps still shape most of the work below:
 ## Roadmap
 
 
-| Feature                            | Release | Size | Notes                                                                                                         |
-| ---------------------------------- | ------- | ---- | ------------------------------------------------------------------------------------------------------------- |
-| ✅ `authToken` cookie fallback      | 0.1.2   | S    | JWT also accepted from the `authToken` cookie when `Authorization` is absent                                  |
-| ✅ `X-Layout` header                | 0.1.3   | S    | Set on rendered responses (still unconditional — see Known Issues)                                            |
-| ✅ HTTP error handling              | 0.2.0   | M    | Error classes + `BaseHttpError` mapping in the server; used by the generator                                  |
-| ✅ Request logging                  | 0.2.0   | M    | Structured JSON per request (`traceId`, method, path, headers, bodySize)                                      |
-| ✅ First test suite                 | 0.2.1   | M    | Unit tests for routing/decorators; integration tests for the server and JWT happy path                        |
-| ✅ Route specificity matching       | 0.2.2   | M    | Static-first O(1) lookup, then params sorted by specificity — route declaration order no longer matters       |
-| ✅ Directory index as `/`           | 0.2.2   | S    | `index.html` (and `indexFiles`) served for `/` and directory paths                                            |
-| ✅ README catch-up                  | 0.2.2   | S    | Error classes, matching rules, and index-file resolution documented                                           |
-| ✅ Complete the error API           | 0.3.0   | S    | `BaseHttpError` exported; `412`, `417`, `422`, `428`, `431`, `502`, `504`, `505` added                        |
-| ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                     |
-| ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                          |
-| ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged      |
-| ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs    |
-| ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                    |
-| ✅ URL decoding                     | 0.3.0   | S    | Request path is decoded once (`decodeURIComponent`) before routing/static lookup; malformed encoding → `400`  |
-| ✅ `405` / `HEAD` / `OPTIONS`       | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                           |
-| ✅ Content-type-aware body parsing    | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string       |
-| ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`        |
-| ✅ Test coverage                    | 0.3.0   | L    | Traversal, JWT rejection/`exp`, error mapping, partial content and body parsing covered; `npm run test:coverage` + a CI job |
-| Configurable logging               | 0.3.1   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                      |
-| Request lifecycle robustness       | 0.3.2   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                    |
-| Graceful shutdown + timeouts       | 0.3.2   | S    | `closeIdleConnections` + drain timeout; expose `requestTimeout`/`headersTimeout`                              |
-| Static file overhaul               | 0.3.3   | L    | See Known Issues — caching, `Content-Length`, async `fs`, dotfile denial, MIME gaps, header-sent guard        |
-| **Response API**                   | 0.4.0   | L    | Make `context.response` real: `status`, `headers`, `cookies`, `redirect()`, `Buffer`/`Stream` returns         |
-| gen alignment for responses        | 0.4.0   | M    | Lets `gen` emit `201 Location`, `204`, server-side redirects, and `Set-Cookie`; removes the client-side hack  |
-| Middleware / hook pipeline         | 0.5 ?   | L    | [ under rethinking ] `onRequest` / `preHandler` / `onSend` / `onError`, per-controller and per-route          |
-| CORS, security headers, rate limit | 0.5.0   | M    | First-party opt-in middleware built on the pipeline                                                           |
-| File uploads                       | 0.6     | L    | Multipart + streaming                                                                                         |
-| Structured validation errors       | 0.6     | S    | `details` payload on errors so DTO field errors reach the client                                              |
-| WebSocket support                  | 0.7     | L    | Requires exposing the underlying `http.Server` for `upgrade`                                                  |
-| Dual ESM/CJS + `exports` map       | 1.0     | M    | CJS-only today, while generated apps are `"type": "module"`                                                   |
-| Stage-3 decorator support          | 1.0     | M    | `tsconfig.json` omits `experimentalDecorators`, so shipped types are legacy 3-arg signatures                  |
-| Expose `server` / `address()`      | 1.0     | S    | Prerequisite for WebSockets and cleaner testing                                                               |
-| Move `IProvider` out               | 1.0     | S    | [ can be rethought ] Belongs in `@currentjs/provider`, not here                                               |
+| Feature                            | Release | Size | Notes                                                                                                                              |
+|------------------------------------|---------|------|------------------------------------------------------------------------------------------------------------------------------------|
+| ✅ `authToken` cookie fallback      | 0.1.2   | S    | JWT also accepted from the `authToken` cookie when `Authorization` is absent                                                       |
+| ✅ `X-Layout` header                | 0.1.3   | S    | Set on rendered responses (still unconditional — see Known Issues)                                                                 |
+| ✅ HTTP error handling              | 0.2.0   | M    | Error classes + `BaseHttpError` mapping in the server; used by the generator                                                       |
+| ✅ Request logging                  | 0.2.0   | M    | Structured JSON per request (`traceId`, method, path, headers, bodySize)                                                           |
+| ✅ First test suite                 | 0.2.1   | M    | Unit tests for routing/decorators; integration tests for the server and JWT happy path                                             |
+| ✅ Route specificity matching       | 0.2.2   | M    | Static-first O(1) lookup, then params sorted by specificity — route declaration order no longer matters                            |
+| ✅ Directory index as `/`           | 0.2.2   | S    | `index.html` (and `indexFiles`) served for `/` and directory paths                                                                 |
+| ✅ README catch-up                  | 0.2.2   | S    | Error classes, matching rules, and index-file resolution documented                                                                |
+| ✅ Complete the error API           | 0.3.0   | S    | `BaseHttpError` exported; `412`, `417`, `422`, `428`, `431`, `502`, `504`, `505` added                                             |
+| ✅ Remaining README gaps            | 0.3.0   | S    | `authToken` cookie fallback and the `X-Layout` / `X-Partial-Content` handshake documented                                          |
+| ✅ JWT expiry validation            | 0.3.0   | S    | **Security.** `exp`/`nbf`/`iat` validated; present-but-invalid token now throws 401                                                |
+| ✅ Stop leaking internals           | 0.3.0   | S    | **Security.** Non-`BaseHttpError` throws now respond with a generic `Internal Server Error`; the real message and stack are logged |
+| ✅ Body size limit                  | 0.3.0   | S    | **Security.** `maxBodySize` option (default 1 MiB); over-limit requests get `413` before the handler runs                          |
+| ✅ Decorator metadata isolation     | 0.3.0   | S    | Routes/`basePath` leak across a class hierarchy via the prototype chain — see Known Issues                                         |
+| ✅ URL decoding                     | 0.3.0   | S    | Request path is decoded once (`decodeURIComponent`) before routing/static lookup; malformed encoding → `400`                       |
+| ✅ `405` / `HEAD` / `OPTIONS`       | 0.3.0   | M    | A method mismatch currently returns `404`; no preflight is possible                                                                |
+| ✅ Content-type-aware body parsing  | 0.3.0   | M    | Strict JSON → `400`; `urlencoded` → object; otherwise `Buffer`. Today everything becomes a UTF-8 string                            |
+| ✅ JWT configuration                | 0.3.0   | S    | Secret / cookie name / HMAC algorithm allowlist / clock tolerance as `jwt` option on `createWebServer`                             |
+| ✅ Test coverage                    | 0.3.0   | L    | Traversal, JWT rejection/`exp`, error mapping, partial content and body parsing covered; `npm run test:coverage` + a CI job        |
+| ✅ `ctx.request.domain` add         | 0.3.1   | S    |                                                                                                                                    |
+| Configurable logging               | 0.3.2   | S    | Levels + on/off; **redact `authorization` and `cookie`** (currently logged in plaintext)                                           |
+| Request lifecycle robustness       | 0.3.3   | S    | Handle `req` `error`/`aborted`; `listen()` must reject instead of crashing on `EADDRINUSE`                                         |
+| Graceful shutdown + timeouts       | 0.3.3   | S    | `closeIdleConnections` + drain timeout; expose `requestTimeout`/`headersTimeout`                                                   |
+| Static file overhaul               | 0.3.4   | L    | See Known Issues — caching, `Content-Length`, async `fs`, dotfile denial, MIME gaps, header-sent guard                             |
+| **Response API**                   | 0.4.0   | L    | Make `context.response` real: `status`, `headers`, `cookies`, `redirect()`, `Buffer`/`Stream` returns                              |
+| gen alignment for responses        | 0.4.0   | M    | Lets `gen` emit `201 Location`, `204`, server-side redirects, and `Set-Cookie`; removes the client-side hack                       |
+| Middleware / hook pipeline         | 0.5 ?   | L    | [ under rethinking ] `onRequest` / `preHandler` / `onSend` / `onError`, per-controller and per-route                               |
+| CORS, security headers, rate limit | 0.5.0   | M    | First-party opt-in middleware built on the pipeline                                                                                |
+| File uploads                       | 0.6     | L    | Multipart + streaming                                                                                                              |
+| Structured validation errors       | 0.6     | S    | `details` payload on errors so DTO field errors reach the client                                                                   |
+| WebSocket support                  | 0.7     | L    | Requires exposing the underlying `http.Server` for `upgrade`                                                                       |
+| Dual ESM/CJS + `exports` map       | 1.0     | M    | CJS-only today, while generated apps are `"type": "module"`                                                                        |
+| Stage-3 decorator support          | 1.0     | M    | `tsconfig.json` omits `experimentalDecorators`, so shipped types are legacy 3-arg signatures                                       |
+| Expose `server` / `address()`      | 1.0     | S    | Prerequisite for WebSockets and cleaner testing                                                                                    |
+| Move `IProvider` out               | 1.0     | S    | [ can be rethought ] Belongs in `@currentjs/provider`, not here                                                                    |
 
 
 ---
