@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.1] - 2026-08-26
+
+- ctx.request.domain added
+
 ## [0.3.0] - 2026-08-24
 
 - extended list of Error classes
