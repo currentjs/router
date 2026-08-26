@@ -7,6 +7,12 @@ export interface AuthenticatedUser {
 
 export interface IRequestContext {
   url: string;
+  /**
+   * The request's hostname, derived from the `Host` header with any port
+   * stripped (e.g. `example.com`). Empty string if no `Host` header was sent.
+   * IPv6 literal hosts keep their brackets (e.g. `[::1]`).
+   */
+  domain: string;
   parameters: Record<string, string | number>;
   /**
    * Parsed request body. The exact type depends on the `Content-Type`:

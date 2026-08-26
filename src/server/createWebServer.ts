@@ -364,6 +364,20 @@ function generateTimestamp(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Strips the port (if any) from a `Host` header value, returning just the
+ * hostname. IPv6 literals (e.g. `[::1]:3000`) keep their brackets.
+ */
+function extractDomain(hostHeader: string | undefined): string {
+  if (!hostHeader) return '';
+  if (hostHeader.startsWith('[')) {
+    const closingBracket = hostHeader.indexOf(']');
+    return closingBracket !== -1 ? hostHeader.slice(0, closingBracket + 1) : hostHeader;
+  }
+  const colonIndex = hostHeader.indexOf(':');
+  return colonIndex !== -1 ? hostHeader.slice(0, colonIndex) : hostHeader;
+}
+
 export function createWebServer(
   { controllers, webDir }: { controllers: any[], webDir?: string },
   options: WebServerOptions = {}
@@ -535,6 +549,7 @@ export function createWebServer(
       const context: IContext = {
         request: {
           url: req.url || '/',
+          domain: extractDomain(req.headers.host),
           parameters: { ...(query as Record<string, any>), ...matched.params },
           body: undefined,
           rawBody: rawBodyBuf,
